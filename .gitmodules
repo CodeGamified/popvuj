@@ -1,0 +1,6 @@
+[submodule "Aufstand/Assets/Engine"]
+	path = Aufstand/Assets/Engine
+	url = https://github.com/CodeGamified/.engine.git
+[submodule "PopVuj/Assets/Engine"]
+	path = PopVuj/Assets/Engine
+	url = https://github.com/CodeGamified/.engine.git
