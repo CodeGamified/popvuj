@@ -12,6 +12,7 @@ using CodeGamified.Bootstrap;
 using PopVuj.Game;
 using PopVuj.Scripting;
 using PopVuj.AI;
+using PopVuj.Crew;
 using PopVuj.UI;
 
 namespace PopVuj.Core
@@ -69,6 +70,8 @@ namespace PopVuj.Core
         private CityGrid _city;
         private CityRenderer _renderer;
         private PopVujMatchManager _match;
+        private MinionManager _minionManager;
+        private MinionRenderer _minionRenderer;
         private PopVujProgram _playerProgram;
         private PopVujFateController _fateController;
         private PopVujTUIManager _tuiManager;
@@ -126,8 +129,14 @@ namespace PopVuj.Core
             // 5. Match manager (needs city)
             CreateMatchManager();
 
+            // 5b. Minion manager (needs city + match)
+            CreateMinionManager();
+
             // 6. Visual renderer (needs city)
             CreateRenderer();
+
+            // 6b. Minion renderer (needs minion manager + city)
+            CreateMinionRenderer();
 
             // 7. Input provider
             CreateInputProvider();
@@ -248,6 +257,30 @@ namespace PopVuj.Core
             _renderer = _city.gameObject.AddComponent<CityRenderer>();
             _renderer.Initialize(_city);
             Log("Created CityRenderer (2.5D cubes)");
+        }
+
+        // =================================================================
+        // MINION MANAGER
+        // =================================================================
+
+        private void CreateMinionManager()
+        {
+            var go = new GameObject("MinionManager");
+            _minionManager = go.AddComponent<MinionManager>();
+            _minionManager.Initialize(_city, _match);
+            Log($"Created MinionManager (slot-based minion AI)");
+        }
+
+        // =================================================================
+        // MINION RENDERER
+        // =================================================================
+
+        private void CreateMinionRenderer()
+        {
+            var go = new GameObject("MinionRenderer");
+            _minionRenderer = go.AddComponent<MinionRenderer>();
+            _minionRenderer.Initialize(_minionManager, _city);
+            Log("Created MinionRenderer");
         }
 
         // =================================================================

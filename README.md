@@ -89,6 +89,10 @@ PopVujSimulationTime   → day/hour time, 100x max warp
 CityGrid               → dual-layer tile map (surface + sewers)
 CityRenderer           → 2.5D cube visualization, per-cell heights + colors
 PopVujMatchManager     → population, faith, disease, crime, god powers
+BuildingSlots          → per-type slot definitions, capacity scales with width
+Minion                 → individual entity: position, needs, state machine
+MinionManager          → spawning, task assignment, movement, slot occupancy
+MinionRenderer         → small cubes walking the road / inside buildings
 PopVujProgram          → deity script execution (20 ops/sec)
 PopVujCompilerExtension → 26 opcodes (18 queries + 8 commands)
 PopVujIOHandler        → bridges opcodes to city/match state
@@ -166,7 +170,7 @@ The Popol Vuh itself is the design document. Tzacol, Bitol, Alom, Qaholom tried 
 ```
 PopVuj/Assets/
 ├── Core/                Bootstrap, simulation time
-├── Crew/                Minion AI, needs, pathfinding (future: individual agents)
+├── Crew/                Minion individuals: BuildingSlots, Minion, MinionManager, MinionRenderer
 ├── Game/                CityGrid, MatchManager, CityRenderer
 ├── Scenes/              World scenes
 ├── Scripting/           CompilerExtension, IOHandler, Program, Editor, Input
