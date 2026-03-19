@@ -40,21 +40,21 @@ namespace PopVuj.Game
         // ── Color palette ───────────────────────────────────────
 
         private static readonly Color RoadColor      = new Color(0.12f, 0.10f, 0.08f);
-        private static readonly Color HouseColor     = new Color(0.6f,  0.45f, 0.25f);
-        private static readonly Color ChapelColor    = new Color(0.9f,  0.8f,  0.3f);
-        private static readonly Color WorkshopColor  = new Color(0.5f,  0.35f, 0.2f);
-        private static readonly Color FarmColor      = new Color(0.2f,  0.5f,  0.15f);
-        private static readonly Color MarketColor    = new Color(0.7f,  0.3f,  0.15f);
-        private static readonly Color FountainColor  = new Color(0.2f,  0.5f,  0.8f);
+        private static readonly Color HouseColor     = new Color(0.6f,  0.45f, 0.25f, 0.10f);
+        private static readonly Color ChapelColor    = new Color(0.9f,  0.8f,  0.3f,  0.10f);
+        private static readonly Color WorkshopColor  = new Color(0.5f,  0.35f, 0.2f,  0.10f);
+        private static readonly Color FarmColor      = new Color(0.2f,  0.5f,  0.15f, 0.10f);
+        private static readonly Color MarketColor    = new Color(0.7f,  0.3f,  0.15f, 0.10f);
+        private static readonly Color FountainColor  = new Color(0.2f,  0.5f,  0.8f,  0.10f);
         private static readonly Color GroundColor    = new Color(0.10f, 0.08f, 0.05f);
 
         // Sewer archetype colors — one per SewerType
-        private static readonly Color DrainColor     = new Color(0.14f, 0.12f, 0.08f);  // thin pipe grey-brown
-        private static readonly Color DenColor       = new Color(0.30f, 0.12f, 0.10f);  // crimson den
-        private static readonly Color CryptColor     = new Color(0.20f, 0.18f, 0.30f);  // dark purple stone
-        private static readonly Color TunnelColor    = new Color(0.18f, 0.15f, 0.10f);  // utility brown
-        private static readonly Color CisternColor   = new Color(0.10f, 0.22f, 0.35f);  // deep water blue
-        private static readonly Color BazaarColor    = new Color(0.28f, 0.15f, 0.08f);  // smuggler amber
+        private static readonly Color DrainColor     = new Color(0.14f, 0.12f, 0.08f, 0.10f);  // thin pipe grey-brown
+        private static readonly Color DenColor       = new Color(0.30f, 0.12f, 0.10f, 0.10f);  // crimson den
+        private static readonly Color CryptColor     = new Color(0.20f, 0.18f, 0.30f, 0.10f);  // dark purple stone
+        private static readonly Color TunnelColor    = new Color(0.18f, 0.15f, 0.10f, 0.10f);  // utility brown
+        private static readonly Color CisternColor   = new Color(0.10f, 0.22f, 0.35f, 0.10f);  // deep water blue
+        private static readonly Color BazaarColor    = new Color(0.28f, 0.15f, 0.08f, 0.10f);  // smuggler amber
 
         // Tree colors
         private static readonly Color TrunkColor     = new Color(0.35f, 0.22f, 0.10f);
@@ -299,10 +299,26 @@ namespace PopVuj.Game
             var r = go.GetComponent<Renderer>();
             if (r == null) return;
             var mat = r.material;
+
             if (mat.HasProperty("_BaseColor"))
                 mat.SetColor("_BaseColor", color);
             else
                 mat.color = color;
+
+            // Enable transparent rendering when alpha < 1
+            if (color.a < 1f)
+            {
+                if (mat.HasProperty("_Surface"))
+                    mat.SetFloat("_Surface", 1f); // 0=Opaque, 1=Transparent
+                if (mat.HasProperty("_Blend"))
+                    mat.SetFloat("_Blend", 0f);   // 0=Alpha blend
+                mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                mat.SetFloat("_ZWrite", 0f);
+                mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                mat.SetOverrideTag("RenderType", "Transparent");
+            }
         }
     }
 }

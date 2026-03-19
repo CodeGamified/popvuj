@@ -88,9 +88,9 @@ namespace PopVuj.Crew
 
                 if (m.State == MinionState.InSlot && m.TargetBuilding >= 0)
                 {
-                    // Inside building — positioned at slot within building volume
+                    // Inside building — positioned at slot-specific furniture
                     x = GetSlotWorldX(m.TargetBuilding, m.SlotIndex);
-                    y = GetBuildingSlotY(m.TargetBuilding);
+                    y = GetBuildingSlotY(m.TargetBuilding, m.SlotIndex);
                     z = InBuildingZ;
                     col = GetInBuildingColor(m.TargetBuilding);
                     w = MinionW; h = MinionH; d = MinionW;
@@ -139,12 +139,13 @@ namespace PopVuj.Crew
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // SLOT POSITIONING
+        // SLOT POSITIONING — aligned to procedural blueprint furniture
         // ═══════════════════════════════════════════════════════════════
 
         /// <summary>
         /// World X for a specific slot within a building.
-        /// Slots are evenly distributed across the building's width.
+        /// Positions match the procedural blueprint interior layouts so
+        /// minions appear at the correct furniture (lectern, pew, bed, bench).
         /// </summary>
         private float GetSlotWorldX(int origin, int slotIndex)
         {
@@ -159,30 +160,108 @@ namespace PopVuj.Crew
             if (totalSlots <= 1)
                 return startX + buildingW * 0.5f;
 
-            float margin = buildingW * 0.1f;
-            float usable = buildingW - margin * 2f;
-            float step = usable / (totalSlots - 1);
-            return startX + margin + Mathf.Clamp(slotIndex, 0, totalSlots - 1) * step;
+            var role = BuildingSlots.GetSlotRole(type, slotIndex);
+
+            switch (type)
+            {
+                case CellType.Chapel:
+                    if (role == SlotRole.Preacher)
+                    {
+                        // Lectern position — left 12% of building
+                        return startX + buildingW * 0.12f;
+                    }
+                    else
+                    {
+                        // Pew positions — fill 28% to 95% of building
+                        int pewIndex = slotIndex - 1; // slot 0 is preacher
+                        int pewCount = totalSlots - 1;
+                        float pewStart = startX + buildingW * 0.28f;
+                        float pewEnd = startX + buildingW * 0.95f;
+                        float pewRegion = pewEnd - pewStart;
+                        float pewSpacing = pewRegion / Mathf.Max(1, pewCount);
+                        return pewStart + pewSpacing * (pewIndex + 0.5f);
+                    }
+
+                case CellType.House:
+                {
+                    // Beds — evenly distributed across 5% to 95% of building
+                    float bedRegion = buildingW * 0.9f;
+                    int bedCount = Mathf.Max(1, bw);
+                    float bedSpacing = bedRegion / bedCount;
+                    int bedIndex = Mathf.Clamp(slotIndex / 2, 0, bedCount - 1); // 2 residents per bed
+                    return startX + buildingW * 0.05f + bedSpacing * (bedIndex + 0.5f);
+                }
+
+                case CellType.Workshop:
+                {
+                    // Workbenches — evenly distributed across 5% to 95%
+                    int benchCount = Mathf.Max(1, bw);
+                    float benchRegion = buildingW * 0.9f;
+                    float benchSpacing = benchRegion / benchCount;
+                    int benchIndex = Mathf.Clamp(slotIndex / 2, 0, benchCount - 1);
+                    return startX + buildingW * 0.05f + benchSpacing * (benchIndex + 0.5f);
+                }
+
+                case CellType.Market:
+                {
+                    // Stalls — merchant at left stall (slot 0), others at stalls
+                    int stallCount = Mathf.Max(1, bw);
+                    float stallRegion = buildingW * 0.9f;
+                    float stallSpacing = stallRegion / stallCount;
+                    int stallIndex = Mathf.Clamp(slotIndex, 0, stallCount - 1);
+                    return startX + buildingW * 0.05f + stallSpacing * (stallIndex + 0.5f);
+                }
+
+                default:
+                {
+                    // Generic even distribution
+                    float margin = buildingW * 0.1f;
+                    float usable = buildingW - margin * 2f;
+                    float step = usable / (totalSlots - 1);
+                    return startX + margin + Mathf.Clamp(slotIndex, 0, totalSlots - 1) * step;
+                }
+            }
         }
 
         /// <summary>
-        /// World Y for a minion inside a building — roughly mid-height of the structure.
+        /// World Y for a minion inside a building — placed at furniture height.
+        /// Preacher stands taller (at lectern), worshippers sit (on pew), etc.
         /// </summary>
-        private float GetBuildingSlotY(int origin)
+        private float GetBuildingSlotY(int origin, int slotIndex)
         {
             var type = _city.GetSurface(origin);
-            float height;
+            var role = BuildingSlots.GetSlotRole(type, slotIndex);
+
             switch (type)
             {
-                case CellType.House:    height = 0.7f;  break;
-                case CellType.Chapel:   height = 1.0f;  break;
-                case CellType.Workshop: height = 0.6f;  break;
-                case CellType.Farm:     height = 0.3f;  break;
-                case CellType.Market:   height = 0.5f;  break;
-                case CellType.Fountain: height = 0.4f;  break;
-                default:                height = 0.4f;  break;
+                case CellType.Chapel:
+                    // Preacher stands at lectern height; worshippers sit on pews
+                    return role == SlotRole.Preacher
+                        ? RoadY + 0.14f  // standing at lectern
+                        : RoadY + 0.08f; // seated in pew
+
+                case CellType.House:
+                    // Resting in beds (low position)
+                    return RoadY + 0.08f;
+
+                case CellType.Workshop:
+                    // Standing at workbench
+                    return RoadY + 0.14f;
+
+                case CellType.Farm:
+                    // Crouching among crops
+                    return RoadY + 0.08f;
+
+                case CellType.Market:
+                    // Standing at counter
+                    return RoadY + 0.12f;
+
+                case CellType.Fountain:
+                    return RoadY + 0.10f;
+
+                default:
+                    return RoadY + 0.10f;
             }
-            return RoadY + height * 0.35f;
         }
 
         private Color GetInBuildingColor(int origin)

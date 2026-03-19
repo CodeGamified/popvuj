@@ -72,6 +72,7 @@ namespace PopVuj.Core
         private PopVujMatchManager _match;
         private MinionManager _minionManager;
         private MinionRenderer _minionRenderer;
+        private StructureRenderer _structureRenderer;
         private PopVujProgram _playerProgram;
         private PopVujFateController _fateController;
         private PopVujTUIManager _tuiManager;
@@ -134,6 +135,9 @@ namespace PopVuj.Core
 
             // 6. Visual renderer (needs city)
             CreateRenderer();
+
+            // 6a. Structure interior renderer (needs city + procedural engine)
+            CreateStructureRenderer();
 
             // 6b. Minion renderer (needs minion manager + city)
             CreateMinionRenderer();
@@ -256,7 +260,19 @@ namespace PopVuj.Core
         {
             _renderer = _city.gameObject.AddComponent<CityRenderer>();
             _renderer.Initialize(_city);
-            Log("Created CityRenderer (2.5D cubes)");
+            Log("Created CityRenderer (2.5D cubes, 10% alpha placeholders)");
+        }
+
+        // =================================================================
+        // STRUCTURE RENDERER (procedural interiors)
+        // =================================================================
+
+        private void CreateStructureRenderer()
+        {
+            var go = new GameObject("StructureRenderer");
+            _structureRenderer = go.AddComponent<StructureRenderer>();
+            _structureRenderer.Initialize(_city);
+            Log("Created StructureRenderer (procedural building + sewer interiors)");
         }
 
         // =================================================================
