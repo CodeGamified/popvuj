@@ -185,6 +185,49 @@ namespace PopVuj.Scripting
                     Emit(ctx, PopVujOpCode.GET_TREES, sourceLine, "get_trees → R0");
                     return true;
 
+                // ── Tarot card name lookups (compile-time) ──────
+                case "get_face":
+                {
+                    string[] arcana = {
+                        "The Fool", "The Magician", "High Priestess", "The Empress",
+                        "The Emperor", "The Hierophant", "The Lovers", "The Chariot",
+                        "Strength", "The Hermit", "Wheel of Fortune", "Justice",
+                        "The Hanged Man", "Death", "Temperance", "The Devil",
+                        "The Tower", "The Star", "The Moon", "The Sun",
+                        "Judgement", "The World"
+                    };
+                    int baseIdx = ctx.AddStringConstant(arcana[0]);
+                    for (int i = 1; i < arcana.Length; i++)
+                        ctx.AddStringConstant(arcana[i]);
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    int bfi = ctx.AddFloatConstant((float)baseIdx);
+                    ctx.Emit(OpCode.LOAD_FLOAT, 1, bfi, sourceLine: sourceLine,
+                        comment: $"face base={baseIdx}");
+                    ctx.Emit(OpCode.ADD, 0, 1, sourceLine: sourceLine,
+                        comment: "get_face(R0) → str idx");
+                    return true;
+                }
+                case "get_gentle_face":
+                {
+                    string[] gentle = {
+                        "High Priestess", "The Empress", "Strength", "The Hermit",
+                        "Temperance", "The Star", "The Sun", "The World",
+                        "Ace of Cups", "Ace of Pentacles"
+                    };
+                    int baseIdx = ctx.AddStringConstant(gentle[0]);
+                    for (int i = 1; i < gentle.Length; i++)
+                        ctx.AddStringConstant(gentle[i]);
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    int bfi = ctx.AddFloatConstant((float)baseIdx);
+                    ctx.Emit(OpCode.LOAD_FLOAT, 1, bfi, sourceLine: sourceLine,
+                        comment: $"gentle base={baseIdx}");
+                    ctx.Emit(OpCode.ADD, 0, 1, sourceLine: sourceLine,
+                        comment: "get_gentle_face(R0) → str idx");
+                    return true;
+                }
+
                 default:
                     return false;
             }

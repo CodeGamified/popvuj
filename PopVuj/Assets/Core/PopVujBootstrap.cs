@@ -11,6 +11,8 @@ using CodeGamified.Quality;
 using CodeGamified.Bootstrap;
 using PopVuj.Game;
 using PopVuj.Scripting;
+using PopVuj.AI;
+using PopVuj.UI;
 
 namespace PopVuj.Core
 {
@@ -68,6 +70,8 @@ namespace PopVuj.Core
         private CityRenderer _renderer;
         private PopVujMatchManager _match;
         private PopVujProgram _playerProgram;
+        private PopVujFateController _fateController;
+        private PopVujTUIManager _tuiManager;
 
         // Camera
         private CameraAmbientMotion _cameraSway;
@@ -130,6 +134,12 @@ namespace PopVuj.Core
 
             // 8. Player program (needs match + city)
             if (enableScripting) CreatePlayerProgram();
+
+            // 8b. Fate controller (tarot card draws)
+            CreateFateController();
+
+            // 8c. TUI manager (left god + right fate + bottom status)
+            CreateTUIManager();
 
             // 9. Wire events + start
             WireEvents();
@@ -261,6 +271,30 @@ namespace PopVuj.Core
             _playerProgram = go.AddComponent<PopVujProgram>();
             _playerProgram.Initialize(_match, _city);
             Log("Created DeityProgram (code-controlled god)");
+        }
+
+        // =================================================================
+        // FATE CONTROLLER (tarot card draws)
+        // =================================================================
+
+        private void CreateFateController()
+        {
+            var go = new GameObject("FateController");
+            _fateController = go.AddComponent<PopVujFateController>();
+            _fateController.Initialize(_match, _city, FateDifficulty.Fickle);
+            Log($"Created FateController (difficulty={_fateController.Difficulty})");
+        }
+
+        // =================================================================
+        // TUI MANAGER
+        // =================================================================
+
+        private void CreateTUIManager()
+        {
+            var go = new GameObject("TUIManager");
+            _tuiManager = go.AddComponent<PopVujTUIManager>();
+            _tuiManager.Initialize(_match, _playerProgram, _fateController);
+            Log("Created TUIManager (god debugger + fate debugger + status panel)");
         }
 
         // =================================================================
