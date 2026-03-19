@@ -10,52 +10,57 @@ namespace PopVuj.Game
     ///
     /// Three depth lanes:
     ///   Z = +BuildingZ  — buildings sit BEHIND the road
-    ///   Z =  0          — road surface / ground line / trees at ground level
-    ///   Sewer cubes sit below Y=0 at Z=0
+    ///   Z =  0          — road surface / ground line / trees
+    ///   Sewers below Y=0 — DERIVED from buildings above.
+    ///                      Depth proportional to building height.
+    ///                      Type determined by building archetype.
     ///
-    /// Multi-tile buildings: the renderer reads _buildingWidth from the grid
-    /// and draws one wide cube for the entire building footprint.
-    ///
-    /// Trees: rendered as simple pine-tree shapes (trunk + cone canopy) on
-    /// empty tiles at Z=0.
+    /// Multi-tile buildings render as one wide cube.
+    /// Multi-tile sewers mirror the footprint below ground.
     /// </summary>
     public class CityRenderer : MonoBehaviour, IQualityResponsive
     {
         private CityGrid _city;
 
-        // Per-slot game objects
-        private GameObject[] _roadObjects;     // road blocks at Z=0
-        private GameObject[] _sewerObjects;    // sewer cubes below ground
+        // Per-slot road blocks
+        private GameObject[] _roadObjects;
         private GameObject _groundLine;
 
-        // Dynamic building objects (destroyed & recreated on change)
+        // Dynamic containers (destroyed & recreated on change)
         private GameObject _buildingParent;
+        private GameObject _sewerParent;
         private GameObject _treeParent;
 
         private bool _dirty = true;
 
         public const float CellSize = 0.5f;
-        private const float BuildingZ = 0.5f;  // buildings sit behind the road
-        private const float RoadH = 0.15f;     // road block height
+        private const float BuildingZ = 0.5f;
+        private const float RoadH = 0.15f;
 
         // ── Color palette ───────────────────────────────────────
 
-        private static readonly Color RoadColor      = new Color(0.12f, 0.10f, 0.08f);  // cobblestone
-        private static readonly Color HouseColor     = new Color(0.6f,  0.45f, 0.25f);  // warm wood
-        private static readonly Color ChapelColor    = new Color(0.9f,  0.8f,  0.3f);   // golden glow
-        private static readonly Color WorkshopColor  = new Color(0.5f,  0.35f, 0.2f);   // dark timber
-        private static readonly Color FarmColor      = new Color(0.2f,  0.5f,  0.15f);  // green crops
-        private static readonly Color MarketColor    = new Color(0.7f,  0.3f,  0.15f);  // terracotta
-        private static readonly Color FountainColor  = new Color(0.2f,  0.5f,  0.8f);   // water blue
-        private static readonly Color SewerColor     = new Color(0.18f, 0.14f, 0.08f);  // murky brown
-        private static readonly Color SewerDenColor  = new Color(0.30f, 0.10f, 0.10f);  // crimson grime
-        private static readonly Color GroundColor    = new Color(0.10f, 0.08f, 0.05f);  // earth divider
+        private static readonly Color RoadColor      = new Color(0.12f, 0.10f, 0.08f);
+        private static readonly Color HouseColor     = new Color(0.6f,  0.45f, 0.25f);
+        private static readonly Color ChapelColor    = new Color(0.9f,  0.8f,  0.3f);
+        private static readonly Color WorkshopColor  = new Color(0.5f,  0.35f, 0.2f);
+        private static readonly Color FarmColor      = new Color(0.2f,  0.5f,  0.15f);
+        private static readonly Color MarketColor    = new Color(0.7f,  0.3f,  0.15f);
+        private static readonly Color FountainColor  = new Color(0.2f,  0.5f,  0.8f);
+        private static readonly Color GroundColor    = new Color(0.10f, 0.08f, 0.05f);
+
+        // Sewer archetype colors — one per SewerType
+        private static readonly Color DrainColor     = new Color(0.14f, 0.12f, 0.08f);  // thin pipe grey-brown
+        private static readonly Color DenColor       = new Color(0.30f, 0.12f, 0.10f);  // crimson den
+        private static readonly Color CryptColor     = new Color(0.20f, 0.18f, 0.30f);  // dark purple stone
+        private static readonly Color TunnelColor    = new Color(0.18f, 0.15f, 0.10f);  // utility brown
+        private static readonly Color CisternColor   = new Color(0.10f, 0.22f, 0.35f);  // deep water blue
+        private static readonly Color BazaarColor    = new Color(0.28f, 0.15f, 0.08f);  // smuggler amber
 
         // Tree colors
-        private static readonly Color TrunkColor     = new Color(0.35f, 0.22f, 0.10f);  // bark brown
-        private static readonly Color CanopyColor    = new Color(0.08f, 0.30f, 0.08f);  // deep pine green
+        private static readonly Color TrunkColor     = new Color(0.35f, 0.22f, 0.10f);
+        private static readonly Color CanopyColor    = new Color(0.08f, 0.30f, 0.08f);
 
-        // ── Heights per building type ───────────────────────────
+        // ── Building heights ────────────────────────────────────
 
         private const float HouseH     = 0.7f;
         private const float ChapelH    = 1.0f;
@@ -63,8 +68,6 @@ namespace PopVuj.Game
         private const float FarmH      = 0.3f;
         private const float MarketH    = 0.5f;
         private const float FountainH  = 0.4f;
-        private const float SewerH     = 0.4f;
-        private const float SewerDenH  = 0.5f;
 
         // Tree dimensions
         private const float TreeTrunkH = 0.15f;
@@ -76,19 +79,14 @@ namespace PopVuj.Game
         {
             _city = city;
 
-            // Road blocks at Z=0 (one per slot)
             _roadObjects = new GameObject[_city.Width];
             for (int i = 0; i < _city.Width; i++)
                 _roadObjects[i] = CreateCell($"Road_{i}");
 
-            // Sewer tiles below ground
-            _sewerObjects = new GameObject[_city.Width];
-            for (int i = 0; i < _city.Width; i++)
-                _sewerObjects[i] = CreateCell($"Sewer_{i}");
-
-            // Containers for dynamic objects
             _buildingParent = new GameObject("Buildings");
             _buildingParent.transform.SetParent(transform, false);
+            _sewerParent = new GameObject("Sewers");
+            _sewerParent.transform.SetParent(transform, false);
             _treeParent = new GameObject("Trees");
             _treeParent.transform.SetParent(transform, false);
 
@@ -109,7 +107,6 @@ namespace PopVuj.Game
         }
 
         public void MarkDirty() => _dirty = true;
-
         public float CityWorldWidth => _city.Width * CellSize;
 
         // ═══════════════════════════════════════════════════════════════
@@ -118,43 +115,32 @@ namespace PopVuj.Game
 
         private void Render()
         {
-            RenderRoadAndSewers();
+            RenderRoad();
             RenderBuildings();
+            RenderSewers();
             RenderTrees();
         }
 
-        private void RenderRoadAndSewers()
+        private void RenderRoad()
         {
             for (int i = 0; i < _city.Width; i++)
             {
                 float x = i * CellSize + CellSize * 0.5f;
-
-                // Road block — always visible at Z=0
                 var roadGO = _roadObjects[i];
                 roadGO.transform.localPosition = new Vector3(x, RoadH * 0.5f, 0f);
                 roadGO.transform.localScale = new Vector3(CellSize * 0.95f, RoadH, CellSize * 0.95f);
                 SetColor(roadGO, RoadColor);
-
-                // Sewer below ground
-                var sewType = _city.GetSewer(i);
-                var sewGO = _sewerObjects[i];
-                GetSewerVisual(sewType, out Color sewColor, out float sewH);
-                sewGO.transform.localPosition = new Vector3(x, -sewH * 0.5f, 0f);
-                sewGO.transform.localScale = new Vector3(CellSize * 0.9f, sewH, CellSize * 0.9f);
-                SetColor(sewGO, sewColor);
             }
         }
 
         private void RenderBuildings()
         {
-            // Destroy old building objects
-            for (int c = _buildingParent.transform.childCount - 1; c >= 0; c--)
-                Destroy(_buildingParent.transform.GetChild(c).gameObject);
+            ClearChildren(_buildingParent);
 
             for (int i = 0; i < _city.Width; i++)
             {
                 int owner = _city.GetOwner(i);
-                if (owner != i) continue; // skip trailing tiles
+                if (owner != i) continue;
 
                 var type = _city.GetSurface(i);
                 if (type == CellType.Empty || type == CellType.Tree) continue;
@@ -167,22 +153,51 @@ namespace PopVuj.Game
                 float totalW = bw * CellSize;
                 float x = i * CellSize + totalW * 0.5f;
 
-                var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                go.name = $"Bldg_{type}_{i}";
-                go.transform.SetParent(_buildingParent.transform, false);
+                var go = CreatePrimitive($"Bldg_{type}_{i}", _buildingParent.transform);
                 go.transform.localPosition = new Vector3(x, RoadH + height * 0.5f, BuildingZ);
                 go.transform.localScale = new Vector3(totalW * 0.92f, height, CellSize * 0.9f);
-                var col = go.GetComponent<Collider>();
-                if (col != null) Destroy(col);
                 SetColor(go, color);
+            }
+        }
+
+        /// <summary>
+        /// Render sewers — derived from the building above each slot.
+        /// Same footprint as the building, depth proportional to building height.
+        /// </summary>
+        private void RenderSewers()
+        {
+            ClearChildren(_sewerParent);
+
+            for (int i = 0; i < _city.Width; i++)
+            {
+                int owner = _city.GetOwner(i);
+                if (owner != i) continue;
+
+                var type = _city.GetSurface(i);
+                if (type == CellType.Empty || type == CellType.Tree) continue;
+
+                int bw = _city.GetBuildingWidth(i);
+                if (bw < 1) bw = 1;
+
+                float depth = _city.GetSewerDepth(i);
+                if (depth <= 0.01f) continue; // no sewer (e.g. farm)
+
+                var sewType = _city.GetSewerAt(i);
+                Color sewColor = GetSewerColor(sewType);
+
+                float totalW = bw * CellSize;
+                float x = i * CellSize + totalW * 0.5f;
+
+                var go = CreatePrimitive($"Sewer_{sewType}_{i}", _sewerParent.transform);
+                go.transform.localPosition = new Vector3(x, -depth * 0.5f, BuildingZ);
+                go.transform.localScale = new Vector3(totalW * 0.88f, depth, CellSize * 0.85f);
+                SetColor(go, sewColor);
             }
         }
 
         private void RenderTrees()
         {
-            // Destroy old tree objects
-            for (int c = _treeParent.transform.childCount - 1; c >= 0; c--)
-                Destroy(_treeParent.transform.GetChild(c).gameObject);
+            ClearChildren(_treeParent);
 
             for (int i = 0; i < _city.Width; i++)
             {
@@ -190,28 +205,21 @@ namespace PopVuj.Game
 
                 float x = i * CellSize + CellSize * 0.5f;
 
-                // Trunk — thin vertical box
-                var trunk = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                trunk.name = $"Trunk_{i}";
-                trunk.transform.SetParent(_treeParent.transform, false);
+                var trunk = CreatePrimitive($"Trunk_{i}", _treeParent.transform);
                 trunk.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH * 0.5f, BuildingZ * 0.5f);
                 trunk.transform.localScale = new Vector3(TreeTrunkW, TreeTrunkH, TreeTrunkW);
-                var tc = trunk.GetComponent<Collider>();
-                if (tc != null) Destroy(tc);
                 SetColor(trunk, TrunkColor);
 
-                // Canopy — cone-like shape (use cube scaled narrow at top via non-uniform scale)
-                // Simple approach: a taller box that tapers — or just use a cube for pine silhouette
-                var canopy = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                canopy.name = $"Canopy_{i}";
-                canopy.transform.SetParent(_treeParent.transform, false);
+                var canopy = CreatePrimitive($"Canopy_{i}", _treeParent.transform);
                 canopy.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH + TreeCanopyH * 0.5f, BuildingZ * 0.5f);
                 canopy.transform.localScale = new Vector3(TreeCanopyW, TreeCanopyH, TreeCanopyW);
-                var cc = canopy.GetComponent<Collider>();
-                if (cc != null) Destroy(cc);
                 SetColor(canopy, CanopyColor);
             }
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        // VISUAL LOOKUPS
+        // ═══════════════════════════════════════════════════════════════
 
         private static void GetBuildingVisual(CellType type, out Color color, out float height)
         {
@@ -227,13 +235,17 @@ namespace PopVuj.Game
             }
         }
 
-        private static void GetSewerVisual(CellType type, out Color color, out float height)
+        private static Color GetSewerColor(SewerType type)
         {
             switch (type)
             {
-                case CellType.Sewer:    color = SewerColor;    height = SewerH;    return;
-                case CellType.SewerDen: color = SewerDenColor; height = SewerDenH; return;
-                default:                color = SewerColor;    height = SewerH;    return;
+                case SewerType.Drain:   return DrainColor;
+                case SewerType.Den:     return DenColor;
+                case SewerType.Crypt:   return CryptColor;
+                case SewerType.Tunnel:  return TunnelColor;
+                case SewerType.Cistern: return CisternColor;
+                case SewerType.Bazaar:  return BazaarColor;
+                default:                return DrainColor;
             }
         }
 
@@ -264,6 +276,22 @@ namespace PopVuj.Game
             var col = go.GetComponent<Collider>();
             if (col != null) Destroy(col);
             return go;
+        }
+
+        private GameObject CreatePrimitive(string name, Transform parent)
+        {
+            var go = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            go.name = name;
+            go.transform.SetParent(parent, false);
+            var col = go.GetComponent<Collider>();
+            if (col != null) Destroy(col);
+            return go;
+        }
+
+        private static void ClearChildren(GameObject parent)
+        {
+            for (int c = parent.transform.childCount - 1; c >= 0; c--)
+                Destroy(parent.transform.GetChild(c).gameObject);
         }
 
         private static void SetColor(GameObject go, Color color)

@@ -22,7 +22,7 @@ namespace PopVuj.Scripting
         GET_FAITH        = 1,
         GET_DISEASE      = 2,
         GET_CRIME        = 3,
-        GET_SEWER_POP    = 4,
+        GET_SEWER_POP    = 4,   // sewer den slot count (derived from houses)
         GET_WEATHER      = 5,   // 0=clear, 1=rain, 2=storm, 3=drought
         GET_CITY_W       = 6,
         GET_SCORE        = 7,
@@ -37,8 +37,8 @@ namespace PopVuj.Scripting
         GET_WORKSHOPS    = 16,
 
         // ── One-arg query (R0=slot → R0=cell type) ──────────
-        GET_CELL         = 17,  // get_cell(slot) → cell type id
-        GET_SEWER_CELL   = 18,  // get_sewer_cell(slot) → sewer type id
+        GET_CELL         = 17,  // get_cell(slot) → surface cell type id
+        GET_SEWER_CELL   = 18,  // get_sewer_cell(slot) → sewer archetype (0-6, derived)
 
         // ── Commands (args in R0, result in R0) ──────────────
         SEND_PROPHET     = 19,  // → 1=ok

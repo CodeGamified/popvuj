@@ -44,7 +44,7 @@ namespace PopVuj.Scripting
                     state.SetRegister(0, _match.Crime);
                     break;
                 case PopVujOpCode.GET_SEWER_POP:
-                    state.SetRegister(0, _match.SewerPopulation);
+                    state.SetRegister(0, _match.SewerDenCount);
                     break;
                 case PopVujOpCode.GET_WEATHER:
                     state.SetRegister(0, (int)_match.CurrentWeather);
@@ -90,7 +90,7 @@ namespace PopVuj.Scripting
                     state.SetRegister(0, (int)_city.GetSurface((int)state.GetRegister(0)));
                     break;
                 case PopVujOpCode.GET_SEWER_CELL:
-                    state.SetRegister(0, (int)_city.GetSewer((int)state.GetRegister(0)));
+                    state.SetRegister(0, (int)_city.GetSewerAt((int)state.GetRegister(0)));
                     break;
 
                 // ── Commands → R0 (1=success, 0=fail) ───────────

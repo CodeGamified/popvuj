@@ -40,7 +40,6 @@ namespace PopVuj.Game
         // ── Population state ────────────────────────────────────
 
         public int Population { get; private set; }
-        public int SewerPopulation { get; private set; }
         public int Heretics { get; private set; }
         public int Births { get; private set; }
         public int Deaths { get; private set; }
@@ -66,6 +65,9 @@ namespace PopVuj.Game
         // ── Resources ───────────────────────────────────────────
 
         public int Wood => _city.Wood;
+
+        /// <summary>Total sewer den slots (derived from houses). Replaces SewerPopulation.</summary>
+        public int SewerDenCount => _city.CountSewer(SewerType.Den);
 
         // ── Accessors ───────────────────────────────────────────
 
@@ -103,7 +105,6 @@ namespace PopVuj.Game
             Heretics = 0;
             Births = 0;
             Deaths = 0;
-            SewerPopulation = 0;
             CurrentWeather = Weather.Clear;
             Score = 0;
             GameOver = false;
@@ -146,16 +147,16 @@ namespace PopVuj.Game
             // ── Heretics — low faith breeds dissent ─────────────
             Heretics = Mathf.Max(0, (int)(Population * (1f - Faith) * 0.3f));
 
-            // ── Disease — spreads from sewers ───────────────────
-            int sewerDens = _city.CountSewer(CellType.SewerDen);
+            // ── Disease — spreads from sewer dens (derived) ──────
+            int denSlots = _city.CountSewer(SewerType.Den);
             int fountains = _city.CountSurface(CellType.Fountain);
-            float diseasePressure = sewerDens * 0.01f - fountains * 0.008f;
+            float diseasePressure = denSlots * 0.008f - fountains * 0.008f;
             if (CurrentWeather == Weather.Rain) diseasePressure += 0.003f;
             if (CurrentWeather == Weather.Drought) diseasePressure += 0.005f;
             Disease = Mathf.Clamp01(Disease + diseasePressure);
 
-            // ── Crime — sewer population breeds crime ───────────
-            float crimePressure = SewerPopulation * 0.005f - Faith * 0.01f;
+            // ── Crime — underground dens breed crime ────────────
+            float crimePressure = denSlots * 0.004f - Faith * 0.01f;
             Crime = Mathf.Clamp01(Crime + crimePressure);
 
             // ── Births — farms + houses + low disease ───────────
@@ -176,27 +177,14 @@ namespace PopVuj.Game
             {
                 Population--;
                 Deaths++;
-
-                // Some die into the sewers (become sewer pop)
-                if (Random.value < 0.3f)
-                    SewerPopulation++;
-
                 OnPopulationChanged?.Invoke(Population);
             }
 
-            // ── Sewer dynamics — exiles descend ─────────────────
-            // Low faith + high crime = people flee underground
+            // ── Crime exiles — high crime drives people out ─────
             if (Random.value < Crime * 0.02f && Population > 2)
             {
                 Population--;
-                SewerPopulation++;
                 OnPopulationChanged?.Invoke(Population);
-            }
-
-            // Sewer dens grow organically
-            if (SewerPopulation > 3 && Random.value < 0.05f)
-            {
-                TryGrowSewerDen();
             }
 
             // ── Tree growth — wilderness reclaims empty land ────
@@ -218,17 +206,6 @@ namespace PopVuj.Game
             // ── Game over check ─────────────────────────────────
             if (Population <= 0)
                 EndGame();
-        }
-
-        private void TryGrowSewerDen()
-        {
-            // Find a random sewer cell and upgrade it to a den
-            for (int attempt = 0; attempt < 10; attempt++)
-            {
-                int slot = Random.Range(0, _city.Width);
-                if (_city.AddSewerDen(slot))
-                    return;
-            }
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -253,8 +230,6 @@ namespace PopVuj.Game
             Population--;
             Deaths++;
             Faith = Mathf.Clamp01(Faith + 0.03f); // fear boost
-            // But some flee to sewers
-            if (Random.value < 0.5f) SewerPopulation++;
             OnPopulationChanged?.Invoke(Population);
             return 1;
         }
@@ -278,7 +253,6 @@ namespace PopVuj.Game
             Population -= kills;
             Deaths += kills;
             Faith = Mathf.Clamp01(Faith + 0.12f);
-            SewerPopulation += kills / 2; // survivors flee underground
             OnPopulationChanged?.Invoke(Population);
             return kills;
         }
