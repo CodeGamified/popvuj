@@ -49,6 +49,7 @@ namespace PopVuj.Game
         private static readonly Color FountainColor  = new Color(0.2f,  0.5f,  0.8f,  0.10f);
         private static readonly Color ShipyardColor  = new Color(0.45f, 0.30f, 0.15f, 0.10f);
         private static readonly Color PierColor      = new Color(0.50f, 0.35f, 0.18f, 0.10f);
+        private static readonly Color WarehouseColor = new Color(0.35f, 0.30f, 0.40f, 0.10f);
         private static readonly Color GroundColor    = new Color(0.10f, 0.08f, 0.05f);
 
         // Sewer archetype colors — one per SewerType
@@ -59,10 +60,10 @@ namespace PopVuj.Game
         private static readonly Color CisternColor   = new Color(0.10f, 0.22f, 0.35f, 0.10f);  // deep water blue
         private static readonly Color BazaarColor    = new Color(0.28f, 0.15f, 0.08f, 0.10f);  // smuggler amber
         private static readonly Color DrydockColor   = new Color(0.20f, 0.25f, 0.35f, 0.10f);  // flooded blue-grey
+        private static readonly Color VaultColor     = new Color(0.25f, 0.20f, 0.30f, 0.10f);  // dark purple vault
 
-        // Water color (rendered beneath piers/cranes)
-        private static readonly Color WaterColor     = new Color(0.08f, 0.22f, 0.40f);
-        private static readonly Color WaterDeepColor = new Color(0.04f, 0.12f, 0.28f);
+        // Water surface (Gerstner wave simulation)
+        private WaterSurface _waterSurface;
 
         // Tree colors
         private static readonly Color TrunkColor     = new Color(0.35f, 0.22f, 0.10f);
@@ -78,6 +79,7 @@ namespace PopVuj.Game
         private const float FountainH  = 1f;
         private const float ShipyardH  = 2f;
         private const float PierH      = 1f;
+        private const float WarehouseH = 3f;
 
         // Tree dimensions
         private const float TreeTrunkH = 0.3f;
@@ -240,13 +242,11 @@ namespace PopVuj.Game
         }
 
         /// <summary>
-        /// Render water beneath Pier and Crane buildings, and extending
+        /// Configure Gerstner wave water surface beneath piers and extending
         /// to the right as open ocean past the last pier.
         /// </summary>
         private void RenderWater()
         {
-            ClearChildren(_waterParent);
-
             // Find the leftmost pier/crane slot (water starts here)
             int waterStart = _city.Width;
             for (int i = 0; i < _city.Width; i++)
@@ -259,30 +259,32 @@ namespace PopVuj.Game
                         waterStart = origin;
                 }
             }
-            if (waterStart >= _city.Width) return; // no piers
 
-            // Water surface beneath piers + extending 4 cells right
+            if (waterStart >= _city.Width)
+            {
+                if (_waterSurface != null) _waterSurface.gameObject.SetActive(false);
+                return;
+            }
+
+            // Create WaterSurface once, reuse across layout changes
+            if (_waterSurface == null)
+            {
+                var go = new GameObject("WaterSurface");
+                go.transform.SetParent(_waterParent.transform, false);
+                _waterSurface = go.AddComponent<WaterSurface>();
+            }
+
+            _waterSurface.gameObject.SetActive(true);
+
             float waterStartX = waterStart * CellSize;
             float waterEndX = _city.Width * CellSize + CellSize * 4f;
-            float waterW = waterEndX - waterStartX;
-            float waterCX = waterStartX + waterW * 0.5f;
-            float waterDepth = 0.8f;
-
-            // Water spans both road (Z=0) and building (Z=BuildingZ) space
+            float surfaceY = RoadH * 0.3f;
+            float bottomY = -0.8f;
             float waterZCenter = BuildingZ * 0.5f;
-            float waterZScale = BuildingZ + CellSize * 0.5f;
+            float waterZExtent = BuildingZ + CellSize * 0.5f;
 
-            // Surface water (at road height)
-            var surface = CreatePrimitive("WaterSurface", _waterParent.transform);
-            surface.transform.localPosition = new Vector3(waterCX, RoadH * 0.3f, waterZCenter);
-            surface.transform.localScale = new Vector3(waterW, RoadH * 0.6f, waterZScale);
-            SetColor(surface, WaterColor);
-
-            // Deep water below
-            var deep = CreatePrimitive("WaterDeep", _waterParent.transform);
-            deep.transform.localPosition = new Vector3(waterCX, -waterDepth * 0.5f, waterZCenter);
-            deep.transform.localScale = new Vector3(waterW, waterDepth, waterZScale);
-            SetColor(deep, WaterDeepColor);
+            _waterSurface.SetBounds(waterStartX, waterEndX, surfaceY, bottomY,
+                                    waterZCenter, waterZExtent);
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -299,8 +301,9 @@ namespace PopVuj.Game
                 case CellType.Farm:     color = FarmColor;     height = FarmH;     return;
                 case CellType.Market:   color = MarketColor;   height = MarketH;   return;
                 case CellType.Fountain: color = FountainColor; height = FountainH; return;
-                case CellType.Shipyard: color = ShipyardColor; height = ShipyardH; return;
-                case CellType.Pier:     color = PierColor;     height = PierH;     return;
+                case CellType.Shipyard:  color = ShipyardColor;  height = ShipyardH;  return;
+                case CellType.Pier:      color = PierColor;      height = PierH;      return;
+                case CellType.Warehouse: color = WarehouseColor; height = WarehouseH; return;
                 default:                color = HouseColor;    height = HouseH;    return;
             }
         }
@@ -316,6 +319,7 @@ namespace PopVuj.Game
                 case SewerType.Cistern: return CisternColor;
                 case SewerType.Bazaar:  return BazaarColor;
                 case SewerType.Drydock: return DrydockColor;
+                case SewerType.Vault:   return VaultColor;
                 default:                return DrainColor;
             }
         }

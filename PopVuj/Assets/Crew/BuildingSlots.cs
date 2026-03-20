@@ -21,6 +21,7 @@ namespace PopVuj.Crew
         Docker,       // carries cargo along the pier
         CraneOperator,// operates a pier crane
         Sailor,       // crews a ship (boards vessel, leaves road)
+        WarehouseKeeper, // manages warehouse inventory
     }
 
     /// <summary>
@@ -50,13 +51,14 @@ namespace PopVuj.Crew
                 case CellType.Market:   return 1 + buildingWidth;       // 1 vendor + stalls
                 case CellType.Fountain: return 1;
                 case CellType.Shipyard: return 1 + buildingWidth * 2;   // 1 foreman + shipwrights
-                case CellType.Pier:     return buildingWidth;           // 1 slot per tile (role depends on fixture)
+                case CellType.Pier:      return buildingWidth;           // 1 slot per tile (role depends on fixture)
+                case CellType.Warehouse: return buildingWidth + 1 + buildingWidth; // crane ops + keeper + haulers
                 default:                return 0;
             }
         }
 
         /// <summary>What role does slot index <paramref name="slotIndex"/> serve in this building?</summary>
-        public static SlotRole GetSlotRole(CellType type, int slotIndex)
+        public static SlotRole GetSlotRole(CellType type, int slotIndex, int buildingWidth = 1)
         {
             switch (type)
             {
@@ -67,7 +69,12 @@ namespace PopVuj.Crew
                 case CellType.Market:   return SlotRole.Merchant;
                 case CellType.Fountain: return SlotRole.Caretaker;
                 case CellType.Shipyard: return slotIndex == 0 ? SlotRole.Foreman : SlotRole.Shipwright;
-                case CellType.Pier:     return SlotRole.Docker;
+                case CellType.Pier:      return SlotRole.Docker;
+                case CellType.Warehouse:
+                    // Slots 0..bw-1: CraneOperator, slot bw: WarehouseKeeper, slots bw+1..: Worker
+                    if (slotIndex < buildingWidth) return SlotRole.CraneOperator;
+                    if (slotIndex == buildingWidth) return SlotRole.WarehouseKeeper;
+                    return SlotRole.Worker;
                 default:                return SlotRole.Resident;
             }
         }

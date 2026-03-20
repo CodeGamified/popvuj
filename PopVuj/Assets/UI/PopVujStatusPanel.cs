@@ -589,6 +589,7 @@ namespace PopVuj.UI
                 lines.Add($"  Houses:{city.CountSurface(CellType.House)} Chapels:{city.CountSurface(CellType.Chapel)}");
                 lines.Add($"  Farms:{city.CountSurface(CellType.Farm)} Shops:{city.CountSurface(CellType.Workshop)}");
                 lines.Add($"  Wood:{_match.Wood} Trees:{city.CountSurface(CellType.Tree)}");
+                lines.Add($"  Stone:{city.Stone} Food:{city.Food} Goods:{city.Goods}");
                 lines.Add($"  Heretics:{_match.Heretics}  Dens:{_match.SewerDenCount}");
             }
             lines.Add($" {TUIColors.Fg(TUIColors.BrightCyan, "[D]")} DEFAULTS");

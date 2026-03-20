@@ -20,6 +20,7 @@ namespace PopVuj.Game
         Fountain   = 8,   // health — reduces disease spread
         Shipyard   = 9,   // harbor — builds ships from wood
         Pier       = 10,  // harbor — wooden walkway over water, supports fixtures
+        Warehouse  = 11,  // storage — houses all city resources
     }
 
     /// <summary>
@@ -48,6 +49,7 @@ namespace PopVuj.Game
         Cistern    = 5,   // fountain reservoir — water storage below
         Bazaar     = 6,   // black market — underground trade / thieves guild
         Drydock    = 7,   // flooded excavation beneath shipyard
+        Vault      = 8,   // reinforced warehouse cellar — deep item storage
     }
 
     /// <summary>
@@ -95,8 +97,11 @@ namespace PopVuj.Game
         // Pier fixture layer — per-slot fixture for Pier cells
         private PierFixture[] _pierFixture;
 
-        // Resources
+        // Resources — physically stored in the Warehouse building
         public int Wood { get; private set; }
+        public int Stone { get; private set; }
+        public int Food { get; private set; }
+        public int Goods { get; private set; }
 
         // Events
         public System.Action OnGridChanged;
@@ -121,6 +126,9 @@ namespace PopVuj.Game
                 _owner[i] = -1;
             }
             Wood = 0;
+            Stone = 0;
+            Food = 0;
+            Goods = 0;
             Generate();
             OnGridChanged?.Invoke();
         }
@@ -201,8 +209,9 @@ namespace PopVuj.Game
                 case CellType.Workshop: return SewerType.Tunnel;
                 case CellType.Market:   return SewerType.Bazaar;
                 case CellType.Fountain: return SewerType.Cistern;
-                case CellType.Shipyard: return SewerType.Drydock;
-                case CellType.Pier:     return SewerType.None;   // over water — no sewer
+                case CellType.Shipyard:  return SewerType.Drydock;
+                case CellType.Warehouse: return SewerType.Vault;
+                case CellType.Pier:      return SewerType.None;   // over water — no sewer
                 default:                return SewerType.None;
             }
         }
@@ -219,8 +228,9 @@ namespace PopVuj.Game
                 case CellType.Workshop: baseDepth = 1f; break;
                 case CellType.Market:   baseDepth = 1f; break;
                 case CellType.Fountain: baseDepth = 1f; break;   // cistern
-                case CellType.Shipyard: baseDepth = 1f; break;   // drydock
-                case CellType.Farm:     return 0f;               // just roots
+                case CellType.Shipyard:  baseDepth = 1f; break;   // drydock
+                case CellType.Warehouse: baseDepth = 2f; break;  // deep vault
+                case CellType.Farm:      return 0f;               // just roots
                 case CellType.Pier:     return 0f;                  // over water
                 default:                return 0f;
             }
@@ -266,7 +276,7 @@ namespace PopVuj.Game
 
         /// <summary>Infrastructure types that cannot be shrunk, destroyed, or expanded-over by scripts.</summary>
         public static bool IsProtectedType(CellType type)
-            => type == CellType.Chapel || type == CellType.Shipyard || type == CellType.Pier;
+            => type == CellType.Chapel || type == CellType.Shipyard || type == CellType.Pier || type == CellType.Warehouse;
 
         // ═══════════════════════════════════════════════════════════════
         // COMMANDS
@@ -379,6 +389,13 @@ namespace PopVuj.Game
 
         public void AddWood(int amount) { Wood += amount; }
 
+        public bool SpendStone(int amount) { if (Stone < amount) return false; Stone -= amount; return true; }
+        public void AddStone(int amount) { Stone += amount; }
+        public bool SpendFood(int amount) { if (Food < amount) return false; Food -= amount; return true; }
+        public void AddFood(int amount) { Food += amount; }
+        public bool SpendGoods(int amount) { if (Goods < amount) return false; Goods -= amount; return true; }
+        public void AddGoods(int amount) { Goods += amount; }
+
         // ═══════════════════════════════════════════════════════════════
         // HARBOR QUERIES
         // ═══════════════════════════════════════════════════════════════
@@ -387,7 +404,7 @@ namespace PopVuj.Game
         public bool IsHarborSlot(int slot)
         {
             var type = GetBuildingAt(slot);
-            return type == CellType.Shipyard || type == CellType.Pier;
+            return type == CellType.Shipyard || type == CellType.Pier || type == CellType.Warehouse;
         }
 
         /// <summary>Get the pier fixture at a slot. Returns None for non-pier slots.</summary>
@@ -483,16 +500,16 @@ namespace PopVuj.Game
         /// civilization begins with a chapel facing the heavens.
         ///
         /// The relative sizes encode identity:
-        ///   Chapel 2w + Shipyard 2w + Pier 8w (3 crane fixtures) = balanced start
+        ///   Chapel 2w + Warehouse 2w + Shipyard 2w + Pier 6w (3 crane fixtures) = balanced start
         ///   Expanding the chapel → pious enclave (more faith, less trade)
         ///   Expanding the shipyard → merchant league (more trade, less faith)
         ///
         /// Layout (right edge, 10 slots):
-        ///   [Shipyard 2w] [Pier 8w — last 3 slots have Crane fixtures]
+        ///   [Warehouse 2w] [Shipyard 2w] [Pier 6w — 3 crane fixtures]
         /// </summary>
         private void PlaceStarterHarbor()
         {
-            // 10 slots total: 2 Shipyard + 8 Pier (last 3 with crane fixtures)
+            // 10 slots: 2 Warehouse + 2 Shipyard + 6 Pier (3 crane fixtures)
             int harborWidth = 10;
             int harborStart = Width - harborWidth;
 
@@ -506,12 +523,13 @@ namespace PopVuj.Game
             }
 
             int cursor = harborStart;
+            PlaceBuilding(cursor, CellType.Warehouse, 2); cursor += 2;
             PlaceBuilding(cursor, CellType.Shipyard, 2);  cursor += 2;
-            PlaceBuilding(cursor, CellType.Pier, 8);
+            PlaceBuilding(cursor, CellType.Pier, 6);
 
             // Install crane fixtures evenly across the pier (spaced for ship widths)
             int pierStart = cursor;
-            int pierWidth = 8;
+            int pierWidth = 6;
             _pierFixture[pierStart + 1] = PierFixture.Crane;                  // near shore
             _pierFixture[pierStart + pierWidth / 2] = PierFixture.Crane;      // mid pier
             _pierFixture[pierStart + pierWidth - 1] = PierFixture.Crane;      // far end

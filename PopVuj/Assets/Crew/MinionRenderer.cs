@@ -121,11 +121,15 @@ namespace PopVuj.Crew
                     if (!m.Cargo.IsEmpty)
                     {
                         cargoGO.SetActive(true);
-                        float cargoX = x + m.FacingDirection * (w * 0.5f + m.Cargo.VisualWidth * 0.3f);
+                        float facingRad = m.FacingAngle * Mathf.Deg2Rad;
+                        float cargoFwd = w * 0.5f + m.Cargo.VisualWidth * 0.3f;
+                        float cargoX = x + Mathf.Sin(facingRad) * cargoFwd;
                         float cargoY = y + m.Cargo.CarryOffsetY;
-                        cargoGO.transform.localPosition = new Vector3(cargoX, cargoY, z);
+                        float cargoZ = z + Mathf.Cos(facingRad) * cargoFwd;
+                        cargoGO.transform.localPosition = new Vector3(cargoX, cargoY, cargoZ);
                         cargoGO.transform.localScale = new Vector3(
                             m.Cargo.VisualWidth, m.Cargo.VisualHeight, m.Cargo.VisualDepth);
+                        cargoGO.transform.localRotation = Quaternion.Euler(0f, m.FacingAngle, 0f);
                         SetColor(cargoGO, Cargo.GetColor(m.Cargo.Kind));
                     }
                     else
@@ -136,6 +140,7 @@ namespace PopVuj.Crew
 
                 go.transform.localPosition = new Vector3(x, y, z);
                 go.transform.localScale = new Vector3(w, h, d);
+                go.transform.localRotation = Quaternion.Euler(0f, m.FacingAngle, 0f);
                 SetColor(go, col);
             }
         }
@@ -162,7 +167,7 @@ namespace PopVuj.Crew
             if (totalSlots <= 1)
                 return startX + buildingW * 0.5f;
 
-            var role = BuildingSlots.GetSlotRole(type, slotIndex);
+            var role = BuildingSlots.GetSlotRole(type, slotIndex, bw);
 
             switch (type)
             {
@@ -233,6 +238,27 @@ namespace PopVuj.Crew
                     return startX + buildingW * 0.05f + pierSpacing * (slotIndex + 0.5f);
                 }
 
+                case CellType.Warehouse:
+                {
+                    // Crane operators at front (1 per tile width), keeper at desk, haulers at shelves
+                    if (slotIndex < bw)
+                    {
+                        // Crane operator — centered on their crane
+                        return startX + (slotIndex + 0.5f) * CityRenderer.CellSize;
+                    }
+                    if (slotIndex == bw)
+                    {
+                        // Keeper at desk (far left)
+                        return startX + buildingW * 0.05f;
+                    }
+                    // Haulers distributed across shelving area
+                    int haulerIdx = slotIndex - bw - 1;
+                    int haulerCount = totalSlots - bw - 1;
+                    float haulerRegion = buildingW * 0.80f;
+                    float haulerSpacing = haulerRegion / Mathf.Max(1, haulerCount);
+                    return startX + buildingW * 0.10f + haulerSpacing * (haulerIdx + 0.5f);
+                }
+
                 default:
                 {
                     // Generic even distribution
@@ -251,7 +277,9 @@ namespace PopVuj.Crew
         private float GetBuildingSlotY(int origin, int slotIndex)
         {
             var type = _city.GetSurface(origin);
-            var role = BuildingSlots.GetSlotRole(type, slotIndex);
+            int bw = _city.GetBuildingWidth(origin);
+            if (bw < 1) bw = 1;
+            var role = BuildingSlots.GetSlotRole(type, slotIndex, bw);
 
             switch (type)
             {
@@ -289,6 +317,14 @@ namespace PopVuj.Crew
                 case CellType.Pier:
                     return RoadY + 0.20f;
 
+                case CellType.Warehouse:
+                    // Crane operators at ground in front; keeper at desk; haulers at shelf height
+                    if (role == SlotRole.CraneOperator)
+                        return RoadY + 0.20f;
+                    if (role == SlotRole.WarehouseKeeper)
+                        return RoadY + 0.22f;
+                    return RoadY + 0.28f;
+
                 default:
                     return RoadY + 0.20f;
             }
@@ -304,8 +340,9 @@ namespace PopVuj.Crew
                 case CellType.Farm:
                 case CellType.Market:  return EatColor;
                 case CellType.Shipyard:
-                case CellType.Pier:    return HarborColor;
-                default:               return WorkColor;
+                case CellType.Pier:       return HarborColor;
+                case CellType.Warehouse:  return WorkColor;
+                default:                  return WorkColor;
             }
         }
 

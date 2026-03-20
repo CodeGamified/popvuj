@@ -17,6 +17,8 @@ namespace PopVuj.Game
     ///   Tunnel  → rail / cart track, support beams
     ///   Cistern → water pool, stone walls
     ///   Bazaar  → stalls, chests, lanterns
+    ///   Drydock → flooded excavation, hull cradle
+    ///   Vault   → reinforced treasure cellar, gold horde, tax chests
     ///
     /// All dimensions parameterize from building width and sewer depth.
     /// </summary>
@@ -68,6 +70,7 @@ namespace PopVuj.Game
                 case SewerType.Cistern: EmitCistern(parts, totalW, cx); break;
                 case SewerType.Bazaar:  EmitBazaar(parts, totalW, cx);  break;
                 case SewerType.Drydock: EmitDrydock(parts, totalW, cx); break;
+                case SewerType.Vault:   EmitVault(parts, totalW, cx);   break;
             }
 
             return parts.ToArray();
@@ -308,6 +311,233 @@ namespace PopVuj.Game
             p.Add(new ProceduralPartDef("dock_floor", PrimitiveType.Cube,
                 new Vector3(cx, -_depth + 0.02f, _buildingZ),
                 new Vector3(totalW * 0.85f, 0.04f, Cell * 0.75f), KStone));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // VAULT — reinforced treasure cellar, gold horde, tax chests
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitVault(List<ProceduralPartDef> p, float totalW, float cx)
+        {
+            // ── Multi-level vault: levels scale with depth (1 level per 1.0 unit) ──
+            int levels = Mathf.Max(1, Mathf.FloorToInt(_depth));
+            float storyH = _depth / levels;
+
+            // ── Outer shell: walls, back wall, ceiling ──
+            float wallThick = 0.08f;
+            float wallH = _depth * 0.92f;
+            p.Add(new ProceduralPartDef("vault_wall_l", PrimitiveType.Cube,
+                new Vector3(_originX + totalW * 0.04f, -_depth * 0.5f, _buildingZ),
+                new Vector3(wallThick, wallH, Cell * 0.82f), KStone));
+            p.Add(new ProceduralPartDef("vault_wall_r", PrimitiveType.Cube,
+                new Vector3(_originX + totalW * 0.96f, -_depth * 0.5f, _buildingZ),
+                new Vector3(wallThick, wallH, Cell * 0.82f), KStone));
+            p.Add(new ProceduralPartDef("vault_backwall", PrimitiveType.Cube,
+                new Vector3(cx, -_depth * 0.5f, _buildingZ + Cell * 0.40f),
+                new Vector3(totalW * 0.86f, wallH, 0.05f), KStone));
+
+            // Ceiling
+            p.Add(new ProceduralPartDef("vault_ceiling", PrimitiveType.Cube,
+                new Vector3(cx, -0.04f, _buildingZ),
+                new Vector3(totalW * 0.86f, 0.06f, Cell * 0.78f), KStone));
+            int strapCount = Mathf.Max(2, _buildingWidth * 2);
+            float strapSpacing = totalW * 0.80f / strapCount;
+            for (int i = 0; i < strapCount; i++)
+            {
+                float sx = _originX + totalW * 0.10f + strapSpacing * (i + 0.5f);
+                p.Add(new ProceduralPartDef($"vault_strap_{i}", PrimitiveType.Cube,
+                    new Vector3(sx, -0.02f, _buildingZ),
+                    new Vector3(0.025f, 0.02f, Cell * 0.70f), KMetal));
+            }
+
+            // ── Iron gate at front (ground-level entrance, spans top level) ──
+            float gateH = storyH * 0.75f;
+            float gateW = totalW * 0.30f;
+            float gateZ = _buildingZ - Cell * 0.35f;
+            float gateBaseY = -storyH; // top level floor
+            p.Add(new ProceduralPartDef("vault_gate_top", PrimitiveType.Cube,
+                new Vector3(cx, gateBaseY + 0.06f + gateH + 0.02f, gateZ),
+                new Vector3(gateW + 0.08f, 0.05f, 0.04f), KMetal));
+            p.Add(new ProceduralPartDef("vault_gate_l", PrimitiveType.Cube,
+                new Vector3(cx - gateW * 0.5f - 0.02f, gateBaseY + 0.06f + gateH * 0.5f, gateZ),
+                new Vector3(0.05f, gateH, 0.04f), KMetal));
+            p.Add(new ProceduralPartDef("vault_gate_r", PrimitiveType.Cube,
+                new Vector3(cx + gateW * 0.5f + 0.02f, gateBaseY + 0.06f + gateH * 0.5f, gateZ),
+                new Vector3(0.05f, gateH, 0.04f), KMetal));
+            int barCount = Mathf.Max(3, Mathf.RoundToInt(gateW / 0.06f));
+            float barSpacing = gateW / (barCount + 1);
+            for (int i = 1; i <= barCount; i++)
+            {
+                float bx = cx - gateW * 0.5f + barSpacing * i;
+                p.Add(new ProceduralPartDef($"vault_bar_{i}", PrimitiveType.Cube,
+                    new Vector3(bx, gateBaseY + 0.06f + gateH * 0.5f, gateZ),
+                    new Vector3(0.018f, gateH * 0.95f, 0.018f), KMetal));
+            }
+
+            // ── Per-level contents ──
+            int pillarCount = Mathf.Max(2, _buildingWidth + 1);
+            float pillarSpacing = totalW * 0.80f / (pillarCount - 1);
+            float pillarW = 0.06f;
+
+            for (int lv = 0; lv < levels; lv++)
+            {
+                float baseY = -_depth + lv * storyH;
+                string tag = $"v{lv}";
+
+                // Floor slab
+                p.Add(new ProceduralPartDef($"{tag}_floor", PrimitiveType.Cube,
+                    new Vector3(cx, baseY + 0.03f, _buildingZ),
+                    new Vector3(totalW * 0.88f, 0.06f, Cell * 0.82f), KStone));
+
+                // Iron-banded pillars spanning this level
+                float pillarH = storyH * 0.85f;
+                for (int pi = 0; pi < pillarCount; pi++)
+                {
+                    float px = _originX + totalW * 0.10f + pillarSpacing * pi;
+                    p.Add(new ProceduralPartDef($"{tag}_pillar_{pi}", PrimitiveType.Cube,
+                        new Vector3(px, baseY + storyH * 0.5f, _buildingZ + Cell * 0.30f),
+                        new Vector3(pillarW, pillarH, pillarW), KStone));
+                    p.Add(new ProceduralPartDef($"{tag}_band_{pi}", PrimitiveType.Cube,
+                        new Vector3(px, baseY + storyH * 0.5f, _buildingZ + Cell * 0.30f),
+                        new Vector3(pillarW + 0.02f, 0.03f, pillarW + 0.02f), KMetal));
+                }
+
+                // Torch sconces (one pair per level)
+                float torchY = baseY + storyH * 0.65f;
+                p.Add(new ProceduralPartDef($"{tag}_torch_l", PrimitiveType.Cube,
+                    new Vector3(_originX + totalW * 0.08f, torchY, _buildingZ),
+                    new Vector3(0.03f, 0.08f, 0.03f), KWood));
+                p.Add(new ProceduralPartDef($"{tag}_torch_l_fl", PrimitiveType.Cube,
+                    new Vector3(_originX + totalW * 0.08f, torchY + 0.06f, _buildingZ),
+                    new Vector3(0.025f, 0.035f, 0.025f), KGold));
+                p.Add(new ProceduralPartDef($"{tag}_torch_r", PrimitiveType.Cube,
+                    new Vector3(_originX + totalW * 0.92f, torchY, _buildingZ),
+                    new Vector3(0.03f, 0.08f, 0.03f), KWood));
+                p.Add(new ProceduralPartDef($"{tag}_torch_r_fl", PrimitiveType.Cube,
+                    new Vector3(_originX + totalW * 0.92f, torchY + 0.06f, _buildingZ),
+                    new Vector3(0.025f, 0.035f, 0.025f), KGold));
+
+                // Ladder between levels (except bottom floor)
+                if (lv > 0)
+                {
+                    float ladderX = _originX + totalW * 0.06f + totalW * 0.04f;
+                    float ladderH = storyH * 0.92f;
+                    // Rails
+                    p.Add(new ProceduralPartDef($"{tag}_ladder_l", PrimitiveType.Cube,
+                        new Vector3(ladderX - 0.03f, baseY + ladderH * 0.5f, _buildingZ - Cell * 0.20f),
+                        new Vector3(0.02f, ladderH, 0.02f), KWood));
+                    p.Add(new ProceduralPartDef($"{tag}_ladder_r", PrimitiveType.Cube,
+                        new Vector3(ladderX + 0.03f, baseY + ladderH * 0.5f, _buildingZ - Cell * 0.20f),
+                        new Vector3(0.02f, ladderH, 0.02f), KWood));
+                    // Rungs
+                    int rungCount = Mathf.Max(2, Mathf.RoundToInt(ladderH / 0.12f));
+                    float rungSpacing = ladderH / (rungCount + 1);
+                    for (int r = 1; r <= rungCount; r++)
+                    {
+                        p.Add(new ProceduralPartDef($"{tag}_rung_{r}", PrimitiveType.Cube,
+                            new Vector3(ladderX, baseY + rungSpacing * r, _buildingZ - Cell * 0.20f),
+                            new Vector3(0.06f, 0.015f, 0.02f), KWood));
+                    }
+                }
+
+                // ── Level-specific contents ──
+                // Bottom levels: gold coin piles (the deep horde)
+                // Middle levels: treasure chests + strongboxes
+                // Top level (nearest surface): tax desk + chests
+
+                if (lv < Mathf.CeilToInt(levels * 0.5f))
+                {
+                    // Lower half: gold piles
+                    int pileCount = Mathf.Max(1, _buildingWidth);
+                    float pileRegion = totalW * 0.55f;
+                    float pileSp = pileRegion / pileCount;
+                    for (int i = 0; i < pileCount; i++)
+                    {
+                        float px = _originX + totalW * 0.22f + pileSp * (i + 0.5f);
+                        float baseW = Mathf.Min(pileSp * 0.7f, 0.20f);
+                        float layerH = 0.04f;
+                        p.Add(new ProceduralPartDef($"{tag}_gold_base_{i}", PrimitiveType.Cube,
+                            new Vector3(px, baseY + 0.06f + layerH * 0.5f, _buildingZ),
+                            new Vector3(baseW, layerH, baseW * 0.8f), KGold));
+                        p.Add(new ProceduralPartDef($"{tag}_gold_mid_{i}", PrimitiveType.Cube,
+                            new Vector3(px, baseY + 0.06f + layerH * 1.5f, _buildingZ),
+                            new Vector3(baseW * 0.70f, layerH, baseW * 0.55f), KGold));
+                        p.Add(new ProceduralPartDef($"{tag}_gold_peak_{i}", PrimitiveType.Cube,
+                            new Vector3(px, baseY + 0.06f + layerH * 2.5f, _buildingZ),
+                            new Vector3(baseW * 0.40f, layerH, baseW * 0.30f), KGold));
+                    }
+
+                    // Strongboxes along back wall on gold levels too
+                    int boxCount = Mathf.Max(2, _buildingWidth * 2);
+                    float boxRegion = totalW * 0.75f;
+                    float boxSp = boxRegion / boxCount;
+                    float boxS = Mathf.Min(boxSp * 0.55f, 0.08f);
+                    for (int i = 0; i < boxCount; i++)
+                    {
+                        float bxx = _originX + totalW * 0.12f + boxSp * (i + 0.5f);
+                        p.Add(new ProceduralPartDef($"{tag}_sbox_{i}", PrimitiveType.Cube,
+                            new Vector3(bxx, baseY + 0.06f + boxS * 0.5f, _buildingZ + Cell * 0.32f),
+                            new Vector3(boxS, boxS, boxS * 0.8f), KMetal));
+                    }
+                }
+                else
+                {
+                    // Upper half: treasure chests
+                    int chestCount = Mathf.Max(1, _buildingWidth);
+                    float chestReg = totalW * 0.65f;
+                    float chestSp = chestReg / chestCount;
+                    float cW = Mathf.Min(chestSp * 0.55f, 0.16f);
+                    float cH = Mathf.Min(storyH * 0.20f, 0.10f);
+                    float cD = cW * 0.65f;
+                    for (int i = 0; i < chestCount; i++)
+                    {
+                        float chX = _originX + totalW * 0.18f + chestSp * (i + 0.5f);
+                        float chBaseY = baseY + 0.06f + cH * 0.5f;
+                        p.Add(new ProceduralPartDef($"{tag}_chest_{i}", PrimitiveType.Cube,
+                            new Vector3(chX, chBaseY, _buildingZ + Cell * 0.22f),
+                            new Vector3(cW, cH, cD), KWood));
+                        p.Add(new ProceduralPartDef($"{tag}_chest_band_{i}", PrimitiveType.Cube,
+                            new Vector3(chX, chBaseY, _buildingZ + Cell * 0.22f),
+                            new Vector3(cW + 0.01f, cH * 0.25f, cD + 0.01f), KMetal));
+                        p.Add(new ProceduralPartDef($"{tag}_chest_lock_{i}", PrimitiveType.Cube,
+                            new Vector3(chX, chBaseY + cH * 0.15f, _buildingZ + Cell * 0.22f - cD * 0.5f - 0.005f),
+                            new Vector3(0.025f, 0.025f, 0.015f), KMetal));
+                    }
+
+                    // Smaller gold stacks on upper levels (taxes collected)
+                    int smallPiles = Mathf.Max(1, _buildingWidth);
+                    float smallRegion = totalW * 0.45f;
+                    float smallSp = smallRegion / smallPiles;
+                    for (int i = 0; i < smallPiles; i++)
+                    {
+                        float spx = _originX + totalW * 0.28f + smallSp * (i + 0.5f);
+                        float sw = Mathf.Min(smallSp * 0.5f, 0.12f);
+                        p.Add(new ProceduralPartDef($"{tag}_taxgold_{i}", PrimitiveType.Cube,
+                            new Vector3(spx, baseY + 0.06f + 0.025f, _buildingZ),
+                            new Vector3(sw, 0.04f, sw * 0.8f), KGold));
+                    }
+                }
+
+                // Tax ledger desk on the top level only
+                if (lv == levels - 1)
+                {
+                    float deskW = Mathf.Min(totalW * 0.12f, 0.16f);
+                    float deskH = storyH * 0.30f;
+                    float deskX = _originX + totalW * 0.12f;
+                    p.Add(new ProceduralPartDef("vault_desk", PrimitiveType.Cube,
+                        new Vector3(deskX, baseY + 0.06f + deskH * 0.5f, _buildingZ - Cell * 0.10f),
+                        new Vector3(deskW, deskH, Cell * 0.20f), KWood));
+                    p.Add(new ProceduralPartDef("vault_ledger", PrimitiveType.Cube,
+                        new Vector3(deskX, baseY + 0.06f + deskH + 0.015f, _buildingZ - Cell * 0.10f),
+                        new Vector3(deskW * 0.70f, 0.02f, Cell * 0.12f), KFabric));
+                    p.Add(new ProceduralPartDef("vault_candle", PrimitiveType.Cube,
+                        new Vector3(deskX + deskW * 0.35f, baseY + 0.06f + deskH + 0.035f, _buildingZ - Cell * 0.10f),
+                        new Vector3(0.015f, 0.04f, 0.015f), KBone));
+                    p.Add(new ProceduralPartDef("vault_candle_fl", PrimitiveType.Cube,
+                        new Vector3(deskX + deskW * 0.35f, baseY + 0.06f + deskH + 0.06f, _buildingZ - Cell * 0.10f),
+                        new Vector3(0.012f, 0.015f, 0.012f), KGold));
+                }
+            }
         }
     }
 }

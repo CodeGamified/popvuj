@@ -33,6 +33,9 @@ namespace PopVuj.Game
         private readonly float _buildingZ;  // Z depth for building furniture
         private readonly PierFixture[] _pierFixtures; // per-slot fixtures for Pier buildings
 
+        // Warehouse resource snapshot — drives dynamic shelf fill
+        private readonly int _resWood, _resStone, _resFood, _resGoods;
+
         // Cell size from CityRenderer
         private const float Cell = CityRenderer.CellSize;
 
@@ -50,7 +53,9 @@ namespace PopVuj.Game
 
         public StructureBlueprint(CellType type, int buildingWidth, float originX,
                                    float roadH = 0.3f, float buildingZ = 1.0f,
-                                   PierFixture[] pierFixtures = null)
+                                   PierFixture[] pierFixtures = null,
+                                   int resWood = 0, int resStone = 0,
+                                   int resFood = 0, int resGoods = 0)
         {
             _type = type;
             _buildingWidth = Mathf.Max(1, buildingWidth);
@@ -58,6 +63,10 @@ namespace PopVuj.Game
             _roadH = roadH;
             _buildingZ = buildingZ;
             _pierFixtures = pierFixtures;
+            _resWood = resWood;
+            _resStone = resStone;
+            _resFood = resFood;
+            _resGoods = resGoods;
         }
 
         public string DisplayName => $"{_type}_{_buildingWidth}w";
@@ -78,8 +87,9 @@ namespace PopVuj.Game
                 case CellType.Farm:     EmitFarm(parts, totalW, cx);     break;
                 case CellType.Market:   EmitMarket(parts, totalW, cx);   break;
                 case CellType.Fountain: EmitFountain(parts, totalW, cx); break;
-                case CellType.Shipyard: EmitShipyard(parts, totalW, cx); break;
-                case CellType.Pier:     EmitPier(parts, totalW, cx);     break;
+                case CellType.Shipyard:  EmitShipyard(parts, totalW, cx);  break;
+                case CellType.Pier:      EmitPier(parts, totalW, cx);      break;
+                case CellType.Warehouse: EmitWarehouse(parts, totalW, cx); break;
             }
 
             return parts.ToArray();
@@ -403,9 +413,10 @@ namespace PopVuj.Game
                 case CellType.Farm:     return 1f;
                 case CellType.Market:   return 1f;
                 case CellType.Fountain: return 1f;
-                case CellType.Shipyard: return 2f;
-                case CellType.Pier:     return 1f;
-                default:                return 1f;
+                case CellType.Shipyard:  return 2f;
+                case CellType.Pier:      return 1f;
+                case CellType.Warehouse: return 3f;
+                default:                 return 1f;
             }
         }
 
@@ -463,6 +474,247 @@ namespace PopVuj.Game
             p.Add(new ProceduralPartDef("yard_roof", PrimitiveType.Cube,
                 new Vector3(cx, floorY + h - 0.04f, _buildingZ),
                 new Vector3(totalW * 0.90f, 0.06f, Cell * 0.85f), KRoof));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // WAREHOUSE — multi-story storage with front cranes + resource fill
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitWarehouse(List<ProceduralPartDef> p, float totalW, float cx)
+        {
+            float floorY = _roadH;
+            float h = GetHeight();         // 3.0
+            int floors = 3;
+            float storyH = h / floors;     // 1.0 per floor
+            int craneCount = _buildingWidth; // 1 crane per tile width
+
+            // Back wall — full height
+            p.Add(new ProceduralPartDef("wh_backwall", PrimitiveType.Cube,
+                new Vector3(cx, floorY + h * 0.5f, _buildingZ + Cell * 0.45f),
+                new Vector3(totalW * 0.92f, h, 0.04f), KWall));
+
+            // Side columns
+            float colW = 0.06f;
+            p.Add(new ProceduralPartDef("wh_col_l", PrimitiveType.Cube,
+                new Vector3(_originX + colW * 0.5f + totalW * 0.02f, floorY + h * 0.5f, _buildingZ),
+                new Vector3(colW, h, colW), KWood));
+            p.Add(new ProceduralPartDef("wh_col_r", PrimitiveType.Cube,
+                new Vector3(_originX + totalW - colW * 0.5f - totalW * 0.02f, floorY + h * 0.5f, _buildingZ),
+                new Vector3(colW, h, colW), KWood));
+
+            // ── Shelf parameters ──
+            float shelfRegion = totalW * 0.80f;        // shelves span 80% of width
+            float shelfStartX = _originX + totalW * 0.10f;
+            int shelfCount = Mathf.Max(1, _buildingWidth * 2); // 2 shelf bays per tile
+            float shelfSpacing = shelfRegion / shelfCount;
+            float shelfW = shelfSpacing * 0.85f;
+            float shelfD = Cell * 0.25f;
+            float postW = 0.03f;
+            float itemS = Mathf.Lerp(0.08f, 0.11f, (_buildingWidth - 1) / 4f);
+
+            // ── Per-floor: slab + thin shelf support posts + horizontal boards ──
+            for (int f = 0; f < floors; f++)
+            {
+                float baseY = floorY + f * storyH;
+                string tag = $"f{f}";
+
+                // Floor slab
+                p.Add(new ProceduralPartDef($"wh_{tag}_floor", PrimitiveType.Cube,
+                    new Vector3(cx, baseY + 0.02f, _buildingZ),
+                    new Vector3(totalW * 0.90f, 0.04f, Cell * 0.85f), f == 0 ? KStone : KWood));
+
+                // Shelf bays: thin vertical posts + horizontal boards
+                for (int s = 0; s < shelfCount; s++)
+                {
+                    float sx = shelfStartX + shelfSpacing * (s + 0.5f);
+                    float postH = storyH * 0.85f;
+
+                    // Left + right support posts (thin sticks)
+                    p.Add(new ProceduralPartDef($"wh_{tag}_postL_{s}", PrimitiveType.Cube,
+                        new Vector3(sx - shelfW * 0.45f, baseY + postH * 0.5f + 0.04f, _buildingZ + Cell * 0.20f),
+                        new Vector3(postW, postH, postW), KWood));
+                    p.Add(new ProceduralPartDef($"wh_{tag}_postR_{s}", PrimitiveType.Cube,
+                        new Vector3(sx + shelfW * 0.45f, baseY + postH * 0.5f + 0.04f, _buildingZ + Cell * 0.20f),
+                        new Vector3(postW, postH, postW), KWood));
+
+                    // Two horizontal shelf boards
+                    for (int b = 1; b <= 2; b++)
+                    {
+                        float boardY = baseY + storyH * b / 3f;
+                        p.Add(new ProceduralPartDef($"wh_{tag}_board_{s}_{b}", PrimitiveType.Cube,
+                            new Vector3(sx, boardY, _buildingZ + Cell * 0.20f),
+                            new Vector3(shelfW, 0.025f, shelfD), KWood));
+                    }
+                }
+
+                // Ground floor keeper desk
+                if (f == 0)
+                {
+                    float deskW = totalW * 0.08f;
+                    float deskH = 0.18f;
+                    p.Add(new ProceduralPartDef("wh_desk", PrimitiveType.Cube,
+                        new Vector3(_originX + totalW * 0.05f, baseY + deskH * 0.5f + 0.04f, _buildingZ),
+                        new Vector3(deskW, deskH, Cell * 0.25f), KWood));
+                }
+            }
+
+            // ── Dynamic resource fill ──
+            //   Floor 0: Wood (logs) + Stone
+            //   Floor 1: Food
+            //   Floor 2: Goods
+            // Each shelf bay has 3 slots (floor level + board1 + board2).
+            // Half the bays per floor for wood/stone split.
+            int halfBays = Mathf.Max(1, shelfCount / 2);
+            int slotsPerBay = 3;
+            EmitWoodLogFill(p, _resWood, 0, 0, halfBays, slotsPerBay,
+                shelfStartX, shelfSpacing, storyH, floorY);
+            EmitResourceFill(p, _resStone, KStone, "stone", 0, halfBays, shelfCount - halfBays, slotsPerBay,
+                shelfStartX, shelfSpacing, storyH, itemS, floorY);
+            EmitResourceFill(p, _resFood,  KGrain, "food",  1, 0, shelfCount, slotsPerBay,
+                shelfStartX, shelfSpacing, storyH, itemS, floorY);
+            EmitResourceFill(p, _resGoods, KMetal, "goods", 2, 0, shelfCount, slotsPerBay,
+                shelfStartX, shelfSpacing, storyH, itemS, floorY);
+
+            // ── Front cranes (1 per tile width, at the building front face) ──
+            float craneZ = _buildingZ - Cell * 0.35f; // in front of building
+            for (int c = 0; c < craneCount; c++)
+            {
+                float craneCX = _originX + (c + 0.5f) * Cell;
+                EmitWarehouseCrane(p, craneCX, Cell, floorY, h, craneZ, c);
+            }
+
+            // Roof
+            p.Add(new ProceduralPartDef("wh_roof", PrimitiveType.Cube,
+                new Vector3(cx, floorY + h - 0.04f, _buildingZ),
+                new Vector3(totalW * 0.94f, 0.06f, Cell * 0.88f), KRoof));
+        }
+
+        /// <summary>
+        /// Emit a warehouse front crane — A-frame legs, cross beam, rope + platform.
+        /// </summary>
+        private void EmitWarehouseCrane(List<ProceduralPartDef> p,
+            float cx, float slotW, float floorY, float totalH, float craneZ, int idx)
+        {
+            float legW = 0.05f;
+            float legH = totalH * 0.90f;
+
+            // A-frame legs
+            p.Add(new ProceduralPartDef($"whcr_leg_l_{idx}", PrimitiveType.Cube,
+                new Vector3(cx - slotW * 0.15f, floorY + legH * 0.5f, craneZ),
+                new Vector3(legW, legH, legW), KWood));
+            p.Add(new ProceduralPartDef($"whcr_leg_r_{idx}", PrimitiveType.Cube,
+                new Vector3(cx + slotW * 0.15f, floorY + legH * 0.5f, craneZ),
+                new Vector3(legW, legH, legW), KWood));
+
+            // Cross beam at top
+            p.Add(new ProceduralPartDef($"whcr_beam_{idx}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + legH + 0.03f, craneZ),
+                new Vector3(slotW * 0.35f, 0.05f, 0.05f), KWood));
+
+            // Rope
+            float ropeH = totalH * 0.65f;
+            p.Add(new ProceduralPartDef($"whcr_rope_{idx}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + legH - ropeH * 0.5f, craneZ),
+                new Vector3(0.014f, ropeH, 0.014f), KFabric));
+
+            // Basket / platform at rope bottom
+            p.Add(new ProceduralPartDef($"whcr_basket_{idx}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + 0.08f, craneZ),
+                new Vector3(0.18f, 0.04f, 0.16f), KWood));
+
+            // Hook at rope tip
+            p.Add(new ProceduralPartDef($"whcr_hook_{idx}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + legH - ropeH + 0.02f, craneZ),
+                new Vector3(0.03f, 0.03f, 0.025f), KMetal));
+        }
+
+        /// <summary>
+        /// Emit wood as individual log pieces stacking into 4×4 mounds.
+        /// Each log matches the minion-carried size (elongated 1:1:4 ratio).
+        /// Logs stack 4 across × 4 high per shelf slot, filling bottom-up.
+        /// </summary>
+        private void EmitWoodLogFill(
+            List<ProceduralPartDef> p, int amount,
+            int floor, int bayOffset, int maxBays, int slotsPerBay,
+            float shelfStartX, float shelfSpacing, float storyH, float floorY)
+        {
+            if (amount <= 0) return;
+
+            const float logCross  = 0.06f;  // width & height of each log
+            const float logLength = 0.24f;  // depth (4× cross-section)
+            const int LOGS_PER_ROW   = 4;
+            const int ROWS_PER_MOUND = 4;
+            const int LOGS_PER_MOUND = LOGS_PER_ROW * ROWS_PER_MOUND; // 16
+
+            float baseY = floorY + floor * storyH;
+            int placed = 0;
+
+            for (int bay = 0; bay < maxBays && placed < amount; bay++)
+            {
+                float bx = shelfStartX + shelfSpacing * (bay + bayOffset + 0.5f);
+
+                for (int s = 0; s < slotsPerBay && placed < amount; s++)
+                {
+                    float slotBaseY;
+                    if (s == 0)
+                        slotBaseY = baseY + 0.06f;
+                    else
+                        slotBaseY = baseY + storyH * s / 3f + 0.025f;
+
+                    float moundLeftX = bx - (LOGS_PER_ROW - 1) * logCross * 0.5f;
+
+                    for (int row = 0; row < ROWS_PER_MOUND && placed < amount; row++)
+                    {
+                        for (int col = 0; col < LOGS_PER_ROW && placed < amount; col++, placed++)
+                        {
+                            float lx = moundLeftX + col * logCross;
+                            float ly = slotBaseY + logCross * 0.5f + row * logCross;
+                            float lz = _buildingZ + Cell * 0.20f;
+
+                            p.Add(new ProceduralPartDef($"wh_log_{placed}", PrimitiveType.Cube,
+                                new Vector3(lx, ly, lz),
+                                new Vector3(logCross, logCross, logLength), KWood));
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Emit resource items on warehouse shelves. Each visual slot holds
+        /// ~5 units. Items fill bottom-up: floor level → board 1 → board 2,
+        /// then next bay.
+        /// </summary>
+        private void EmitResourceFill(
+            List<ProceduralPartDef> p, int amount, string colorKey, string resTag,
+            int floor, int bayOffset, int maxBays, int slotsPerBay,
+            float shelfStartX, float shelfSpacing, float storyH,
+            float itemS, float floorY)
+        {
+            if (amount <= 0) return;
+            const int UNITS_PER_SLOT = 5;
+            int totalSlots = maxBays * slotsPerBay;
+            int filled = Mathf.Min(Mathf.CeilToInt((float)amount / UNITS_PER_SLOT), totalSlots);
+            float baseY = floorY + floor * storyH;
+
+            int idx = 0;
+            for (int bay = 0; bay < maxBays && idx < filled; bay++)
+            {
+                float bx = shelfStartX + shelfSpacing * (bay + bayOffset + 0.5f);
+
+                for (int s = 0; s < slotsPerBay && idx < filled; s++, idx++)
+                {
+                    float sy;
+                    if (s == 0)
+                        sy = baseY + 0.06f + itemS * 0.5f;                    // on floor
+                    else
+                        sy = baseY + storyH * s / 3f + 0.025f + itemS * 0.5f; // on shelf board
+
+                    p.Add(new ProceduralPartDef($"wh_res_{resTag}_{idx}", PrimitiveType.Cube,
+                        new Vector3(bx, sy, _buildingZ + Cell * 0.20f),
+                        new Vector3(itemS, itemS, itemS), colorKey));
+                }
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -567,42 +819,120 @@ namespace PopVuj.Game
         // PIER FIXTURES — crane, cannon, fishing pole per slot
         // ═══════════════════════════════════════════════════════════════
 
+        /// <summary>
+        /// Medieval treadwheel crane — human-powered (implied by minion attendance).
+        /// Two A-frame uprights supporting an axle, a large treadwheel on the
+        /// pier side, a jib arm extending over the water (-Z toward docked ship),
+        /// rope + hook hanging from the jib tip.
+        /// </summary>
         private void EmitCraneFixture(List<ProceduralPartDef> p, float cx, float slotW, float floorY)
         {
-            float h = 1.8f; // crane height
+            float h = 1.8f;
 
-            // Two A-frame legs
+            // ── A-frame uprights (straddling the pier, oriented along Z) ──
             float legW = 0.06f;
             float legH = h * 0.85f;
+            float legYC = floorY + legH * 0.5f + 0.06f;
+            // Legs sit on the pier, offset in X to form the A-frame
             p.Add(new ProceduralPartDef("crane_leg_l", PrimitiveType.Cube,
-                new Vector3(cx - slotW * 0.15f, floorY + legH * 0.5f + 0.06f, _buildingZ),
+                new Vector3(cx - slotW * 0.15f, legYC, _buildingZ),
                 new Vector3(legW, legH, legW), KWood));
             p.Add(new ProceduralPartDef("crane_leg_r", PrimitiveType.Cube,
-                new Vector3(cx + slotW * 0.15f, floorY + legH * 0.5f + 0.06f, _buildingZ),
+                new Vector3(cx + slotW * 0.15f, legYC, _buildingZ),
                 new Vector3(legW, legH, legW), KWood));
 
-            // Cross beam at top
-            p.Add(new ProceduralPartDef("crane_beam", PrimitiveType.Cube,
-                new Vector3(cx, floorY + legH + 0.04f, _buildingZ),
+            // Cross brace between legs (mid-height structural support)
+            float braceY = floorY + legH * 0.45f;
+            p.Add(new ProceduralPartDef("crane_brace", PrimitiveType.Cube,
+                new Vector3(cx, braceY, _buildingZ),
+                new Vector3(slotW * 0.30f, 0.04f, 0.04f), KWood));
+
+            // Top axle beam spanning between the two uprights
+            float axleY = floorY + legH + 0.04f;
+            p.Add(new ProceduralPartDef("crane_axle", PrimitiveType.Cube,
+                new Vector3(cx, axleY, _buildingZ),
                 new Vector3(slotW * 0.35f, 0.06f, 0.06f), KWood));
 
-            // Swing arm extending outward (right, over water)
-            float armW = slotW * 0.6f;
-            p.Add(new ProceduralPartDef("crane_arm", PrimitiveType.Cube,
-                new Vector3(cx + armW * 0.3f, floorY + legH + 0.08f, _buildingZ),
-                new Vector3(armW, 0.05f, 0.05f), KWood));
+            // ── Treadwheel (on the pier/building side, +Z) ──
+            // Represented as a large disc: outer rim + hub + spokes
+            float wheelR = h * 0.30f;       // wheel radius
+            float wheelZ = _buildingZ + Cell * 0.10f; // behind the axle (pier side)
+            float wheelCY = axleY;           // centered on the axle
 
-            // Rope hanging from arm tip
-            float ropeX = cx + armW * 0.55f;
-            float ropeH = h * 0.5f;
+            // Outer rim (thin wide cube approximating a circle)
+            p.Add(new ProceduralPartDef("wheel_rim", PrimitiveType.Cube,
+                new Vector3(cx, wheelCY, wheelZ),
+                new Vector3(wheelR * 2f, wheelR * 2f, 0.04f), KWood));
+            // Hub
+            p.Add(new ProceduralPartDef("wheel_hub", PrimitiveType.Cube,
+                new Vector3(cx, wheelCY, wheelZ),
+                new Vector3(0.08f, 0.08f, 0.06f), KMetal));
+            // Spokes (4 radial bars forming a cross)
+            float spokeLen = wheelR * 0.85f;
+            p.Add(new ProceduralPartDef("spoke_h", PrimitiveType.Cube,
+                new Vector3(cx, wheelCY, wheelZ),
+                new Vector3(spokeLen * 2f, 0.03f, 0.03f), KWood));
+            p.Add(new ProceduralPartDef("spoke_v", PrimitiveType.Cube,
+                new Vector3(cx, wheelCY, wheelZ),
+                new Vector3(0.03f, spokeLen * 2f, 0.03f), KWood));
+
+            // Treadwheel treads (steps inside the rim, hinted by short boards on the inner face)
+            int treadCount = 8;
+            for (int t = 0; t < treadCount; t++)
+            {
+                float angle = t * Mathf.PI * 2f / treadCount;
+                float tX = cx + Mathf.Cos(angle) * wheelR * 0.75f;
+                float tY = wheelCY + Mathf.Sin(angle) * wheelR * 0.75f;
+                p.Add(new ProceduralPartDef($"tread_{t}", PrimitiveType.Cube,
+                    new Vector3(tX, tY, wheelZ),
+                    new Vector3(0.05f, 0.02f, 0.04f), KWood));
+            }
+
+            // ── Jib arm extending over the water (-Z, toward docked ship) ──
+            float jibLen = slotW * 0.70f;
+            float jibZ = _buildingZ - jibLen * 0.5f;
+            p.Add(new ProceduralPartDef("crane_jib", PrimitiveType.Cube,
+                new Vector3(cx, axleY + 0.04f, jibZ),
+                new Vector3(0.05f, 0.05f, jibLen), KWood));
+
+            // Counter-weight stub on the pier side (+Z)
+            float counterLen = slotW * 0.18f;
+            p.Add(new ProceduralPartDef("crane_counter", PrimitiveType.Cube,
+                new Vector3(cx, axleY + 0.04f, _buildingZ + counterLen * 0.5f + 0.04f),
+                new Vector3(0.05f, 0.05f, counterLen), KWood));
+
+            // Support struts from legs to jib (diagonal bracing seen from the side)
+            float strutTopY = axleY + 0.02f;
+            float strutBotY = floorY + legH * 0.60f;
+            float strutTopZ = _buildingZ - jibLen * 0.25f;
+            float strutMidY = (strutTopY + strutBotY) * 0.5f;
+            float strutMidZ = (_buildingZ + strutTopZ) * 0.5f;
+            float strutLen = Mathf.Sqrt(
+                (strutTopY - strutBotY) * (strutTopY - strutBotY) +
+                (strutTopZ - _buildingZ) * (strutTopZ - _buildingZ));
+            p.Add(new ProceduralPartDef("crane_strut_l", PrimitiveType.Cube,
+                new Vector3(cx - slotW * 0.08f, strutMidY, strutMidZ),
+                new Vector3(0.03f, strutLen, 0.03f), KWood));
+            p.Add(new ProceduralPartDef("crane_strut_r", PrimitiveType.Cube,
+                new Vector3(cx + slotW * 0.08f, strutMidY, strutMidZ),
+                new Vector3(0.03f, strutLen, 0.03f), KWood));
+
+            // ── Rope hanging from jib tip (over the ship) ──
+            float ropeTipZ = _buildingZ - jibLen + 0.04f;
+            float ropeH = h * 0.50f;
             p.Add(new ProceduralPartDef("crane_rope", PrimitiveType.Cube,
-                new Vector3(ropeX, floorY + legH - ropeH * 0.5f, _buildingZ),
+                new Vector3(cx, axleY - ropeH * 0.5f, ropeTipZ),
                 new Vector3(0.016f, ropeH, 0.016f), KFabric));
 
             // Hook at rope bottom
             p.Add(new ProceduralPartDef("crane_hook", PrimitiveType.Cube,
-                new Vector3(ropeX, floorY + legH - ropeH + 0.02f, _buildingZ),
+                new Vector3(cx, axleY - ropeH + 0.02f, ropeTipZ),
                 new Vector3(0.04f, 0.04f, 0.03f), KMetal));
+
+            // ── Platform / base plinth under the crane ──
+            p.Add(new ProceduralPartDef("crane_base", PrimitiveType.Cube,
+                new Vector3(cx, floorY + 0.04f, _buildingZ),
+                new Vector3(slotW * 0.40f, 0.06f, slotW * 0.35f), KStone));
         }
 
         private void EmitCannonFixture(List<ProceduralPartDef> p, float cx, float slotW, float floorY, int idx)

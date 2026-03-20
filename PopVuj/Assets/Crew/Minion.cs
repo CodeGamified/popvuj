@@ -12,6 +12,7 @@ namespace PopVuj.Crew
         Idle,       // standing on road, waiting to pick next task
         Walking,    // moving left/right along the road to a target
         InSlot,     // occupying a building slot (working / worshipping / resting)
+        Hauling,    // carrying cargo between two locations (crane → warehouse)
     }
 
     /// <summary>
@@ -24,6 +25,16 @@ namespace PopVuj.Crew
         Faith,      // → Chapel
         Work,       // → Workshop / Farm
         Wander,     // → walk around aimlessly
+        Haul,       // → carry cargo between locations
+    }
+
+    /// <summary>
+    /// Phase within a haul task — pick up at source, deliver to destination.
+    /// </summary>
+    public enum HaulPhase
+    {
+        GoingToSource,       // walking to crane / pickup point
+        GoingToDestination,  // carrying cargo to warehouse / delivery point
     }
 
     /// <summary>
@@ -55,6 +66,7 @@ namespace PopVuj.Crew
         // ── Movement ────────────────────────────────────────────
         public float BaseWalkSpeed;    // innate speed (without cargo)
         public int FacingDirection;    // -1 = left, 1 = right
+        public float FacingAngle;      // Y-axis rotation in degrees (90 = +X right, -90 = -X left, 0 = +Z away, 180 = -Z toward)
 
         // ── Lane / traffic ──────────────────────────────────────
         // Lane is a perpendicular offset from the segment's lane center.
@@ -97,6 +109,14 @@ namespace PopVuj.Crew
 
         // ── Pier lane offset (legacy, unused by walkway system) ─
         public const float PIER_LANE_OFFSET  =  0.50f;
+
+        // ── Hauling state ─────────────────────────────────────────
+        /// <summary>Current haul phase (only valid when State == Hauling).</summary>
+        public HaulPhase HaulPhase;
+        /// <summary>Cell index of haul source (e.g. crane pier slot).</summary>
+        public int HaulSource;
+        /// <summary>Building origin of haul destination (e.g. warehouse).</summary>
+        public int HaulDestination;
 
         // ── Walkway navigation state ────────────────────────────
         /// <summary>Current edge the minion is on (null = unplaced).</summary>
@@ -154,6 +174,7 @@ namespace PopVuj.Crew
             SlotIndex = -1;
             TaskTimer = Random.Range(0.1f, 1f); // stagger initial decisions
             FacingDirection = Random.value > 0.5f ? 1 : -1;
+            FacingAngle = FacingDirection > 0 ? 90f : -90f;
 
             Hunger = Random.Range(0.1f, 0.5f);
             Fatigue = Random.Range(0.1f, 0.5f);

@@ -70,6 +70,10 @@ namespace PopVuj.Scripting
         SEND_TRADE       = 41,  // send_trade(route) → 1=ok (0-4)
         REPAIR_SHIP      = 42,  // repair_ship() → 1=ok (costs 1 wood)
         BLESS_SHIP       = 43,  // bless_ship() → 1=ok
+
+        // ── Ship module customization ─────────────────────────────
+        SET_SHIP_MODULE  = 44,  // set_ship_module(packed) → 1=ok (packed = ship_id*100 + tile*10 + module)
+        GET_SHIP_MODULE  = 45,  // get_ship_module(packed) → module type (packed = ship_id*100 + tile*10)
     }
 
     /// <summary>
@@ -253,6 +257,22 @@ namespace PopVuj.Scripting
                     return true;
                 case "bless_ship":
                     Emit(ctx, PopVujOpCode.BLESS_SHIP, sourceLine, "bless_ship → R0");
+                    return true;
+
+                // ── Ship module customization ────────────────────
+                // set_ship_module(packed): packed = ship_id*100 + tile*10 + module
+                //   Module types: 0=None 1=Helm 2=Mast 3=Cannon 4=Crane
+                //                 5=Oars 6=CargoHatch 7=Cabin 8=FishingRig 9=Lookout
+                case "set_ship_module":
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    Emit(ctx, PopVujOpCode.SET_SHIP_MODULE, sourceLine, "set_ship_module(R0=packed) → R0");
+                    return true;
+                // get_ship_module(packed): packed = ship_id*100 + tile*10 → module type in R0
+                case "get_ship_module":
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    Emit(ctx, PopVujOpCode.GET_SHIP_MODULE, sourceLine, "get_ship_module(R0=packed) → R0");
                     return true;
 
                 // ── Tarot card name lookups (compile-time) ──────

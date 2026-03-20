@@ -176,6 +176,28 @@ namespace PopVuj.Scripting
                 case PopVujOpCode.BLESS_SHIP:
                     state.SetRegister(0, _match.BlessShip());
                     break;
+
+                // ── Ship module customization ────────────────────
+
+                case PopVujOpCode.SET_SHIP_MODULE:
+                {
+                    // Unpack: packed = ship_id*100 + tile*10 + module
+                    int packed = (int)state.GetRegister(0);
+                    int shipId = packed / 100;
+                    int tile = (packed % 100) / 10;
+                    int module = packed % 10;
+                    state.SetRegister(0, _match.SetShipModule(shipId, tile, module));
+                    break;
+                }
+                case PopVujOpCode.GET_SHIP_MODULE:
+                {
+                    // Unpack: packed = ship_id*100 + tile*10
+                    int packed = (int)state.GetRegister(0);
+                    int shipId = packed / 100;
+                    int tile = (packed % 100) / 10;
+                    state.SetRegister(0, _match.GetShipModule(shipId, tile));
+                    break;
+                }
             }
         }
 

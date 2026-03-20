@@ -250,6 +250,15 @@ namespace PopVuj.Crew
             return FindNearestEdge(cx, bz, out progress);
         }
 
+        /// <summary>Find the edge and progress for a specific cell index (e.g. a crane slot).</summary>
+        public WalkEdge FindEdgeForCell(CityGrid city, int cellIndex, out float progress)
+        {
+            float cs = CityRenderer.CellSize;
+            float cx = (cellIndex + 0.5f) * cs;
+            float bz = city.GetBuildingAt(cellIndex) == CellType.Pier ? PierZ : RoadZ;
+            return FindNearestEdge(cx, bz, out progress);
+        }
+
         /// <summary>Find the closest edge to a world point.</summary>
         public WalkEdge FindNearestEdge(float worldX, float worldZ, out float progress)
         {

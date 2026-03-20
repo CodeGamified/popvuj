@@ -34,6 +34,9 @@ namespace PopVuj.Game
 
         private bool _dirty = true;
 
+        // Track resource values to detect changes (warehouse fill)
+        private int _prevWood, _prevStone, _prevFood, _prevGoods;
+
         // Constants matching CityRenderer
         private const float RoadH = 0.3f;
         private const float BuildingZ = 1.0f;
@@ -56,6 +59,18 @@ namespace PopVuj.Game
 
         private void LateUpdate()
         {
+            // Auto-dirty when city resources change (warehouse fill)
+            if (_city != null
+                && (_city.Wood != _prevWood || _city.Stone != _prevStone
+                 || _city.Food != _prevFood || _city.Goods != _prevGoods))
+            {
+                _prevWood  = _city.Wood;
+                _prevStone = _city.Stone;
+                _prevFood  = _city.Food;
+                _prevGoods = _city.Goods;
+                _dirty = true;
+            }
+
             if (!_dirty) return;
             _dirty = false;
             Rebuild();
@@ -93,7 +108,11 @@ namespace PopVuj.Game
                     for (int f = 0; f < bw; f++)
                         fixtures[f] = _city.GetPierFixture(i + f);
                 }
-                var bldgBP = new StructureBlueprint(type, bw, originX, RoadH, BuildingZ, fixtures);
+                var bldgBP = new StructureBlueprint(type, bw, originX, RoadH, BuildingZ, fixtures,
+                    resWood:  type == CellType.Warehouse ? _city.Wood  : 0,
+                    resStone: type == CellType.Warehouse ? _city.Stone : 0,
+                    resFood:  type == CellType.Warehouse ? _city.Food  : 0,
+                    resGoods: type == CellType.Warehouse ? _city.Goods : 0);
                 var bldgResult = ProceduralAssembler.Build(bldgBP, _structurePalette);
                 if (bldgResult.IsValid)
                 {

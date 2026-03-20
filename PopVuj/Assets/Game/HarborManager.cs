@@ -109,13 +109,18 @@ namespace PopVuj.Game
                 ship.Condition = 1f;
                 _ships.Add(ship);
 
+                // Ships arrive carrying lumber from the timber islands
+                ship.CargoCount = ship.CargoCapacity;
+                ship.HoldCargoKind = CargoKind.Log;
+                ship.Route = TradeRoute.TimberIslands;
+
                 int crane = FindFreeCraneSlot();
                 if (crane >= 0)
                 {
                     ship.TargetCraneSlot = crane;
                     ship.DockX = (crane + 0.5f) * CityRenderer.CellSize;
                     ship.X = ship.DockX;
-                    ship.State = ShipState.Idle;
+                    ship.State = ShipState.Unloading; // waiting for minion haulers
                 }
                 else
                 {
@@ -246,20 +251,19 @@ namespace PopVuj.Game
             {
                 if (_city.GetPierFixture(i) != PierFixture.Crane) continue;
 
-                // Find a ship assigned to this crane that needs servicing
                 Ship docked = FindShipAtCrane(i);
                 if (docked == null) continue;
 
-                if (!_craneTimers.ContainsKey(i))
-                    _craneTimers[i] = 0f;
-
-                _craneTimers[i] += 1f;
-                if (_craneTimers[i] < CRANE_LOAD_INTERVAL) continue;
-                _craneTimers[i] = 0f;
-
-                // Transfer one cargo unit
+                // Loading is still crane-driven (automatic when ship is in Loading state)
                 if (docked.State == ShipState.Loading)
                 {
+                    if (!_craneTimers.ContainsKey(i))
+                        _craneTimers[i] = 0f;
+
+                    _craneTimers[i] += 1f;
+                    if (_craneTimers[i] < CRANE_LOAD_INTERVAL) continue;
+                    _craneTimers[i] = 0f;
+
                     if (docked.CargoCount < docked.CargoCapacity)
                     {
                         docked.CargoCount++;
@@ -268,19 +272,7 @@ namespace PopVuj.Game
                         OnShipsChanged?.Invoke();
                     }
                 }
-                else if (docked.State == ShipState.Unloading)
-                {
-                    if (docked.CargoCount > 0)
-                    {
-                        docked.CargoCount--;
-                        // Each unloaded unit = trade income
-                        TradeIncome++;
-                        _city.AddWood(1); // simplified: returned goods → resources
-                        if (docked.CargoCount <= 0)
-                            docked.State = ShipState.Idle;
-                        OnShipsChanged?.Invoke();
-                    }
-                }
+                // Unloading is handled by minion haulers — no automatic transfer
             }
         }
 
@@ -312,6 +304,7 @@ namespace PopVuj.Game
 
                     // Ship returns — fill hold with route-specific cargo
                     ship.CargoCount = GetReturnCargo(ship.Route, ship.CargoCapacity);
+                    ship.HoldCargoKind = Ship.GetRouteCargoKind(ship.Route);
                     ship.State = ShipState.Arriving;
                     ship.X = _pierRightX + 10f; // offscreen right
                     OnShipReturned?.Invoke(ship);
@@ -503,6 +496,98 @@ namespace PopVuj.Game
                     && ship.CrewCount < ship.CrewCapacity)
                     return ship;
             }
+            return null;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // CRANE–MINION INTERFACE — called by MinionManager haulers
+        // ═══════════════════════════════════════════════════════════════
+
+        /// <summary>Get a ship at a specific crane that is waiting for minion unloading.</summary>
+        public Ship GetUnloadingShipAtCrane(int craneSlot)
+        {
+            foreach (var s in _ships)
+            {
+                if (s.TargetCraneSlot == craneSlot
+                    && s.State == ShipState.Unloading && s.CargoCount > 0)
+                    return s;
+            }
+            return null;
+        }
+
+        /// <summary>Find any crane slot that has a ship needing unloading. Returns -1 if none.</summary>
+        public int FindCraneWithUnloadingShip()
+        {
+            for (int i = 0; i < _city.Width; i++)
+            {
+                if (_city.GetPierFixture(i) != PierFixture.Crane) continue;
+                if (GetUnloadingShipAtCrane(i) != null) return i;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Take one cargo unit from a ship (called when a hauler minion arrives at the crane).
+        /// Returns true if a unit was taken, false if the ship is empty.
+        /// Transitions ship to Idle when hold is empty.
+        /// </summary>
+        public bool TakeCargoUnit(Ship ship)
+        {
+            if (ship.CargoCount <= 0) return false;
+            ship.CargoCount--;
+            TradeIncome++;
+            if (ship.CargoCount <= 0)
+                ship.State = ShipState.Idle;
+            OnShipsChanged?.Invoke();
+            return true;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // DECK MODULE CUSTOMIZATION
+        // ═══════════════════════════════════════════════════════════════
+
+        /// <summary>
+        /// Set/swap a deck module on a docked ship at a specific tile index.
+        /// Ship must be Idle or Launched (not at sea or loading).
+        /// Costs 1 wood per swap. Returns true on success.
+        /// </summary>
+        public bool SetShipModule(int shipId, int tileIndex, DeckModule module)
+        {
+            var ship = FindShipById(shipId);
+            if (ship == null) return false;
+            if (ship.State != ShipState.Idle && ship.State != ShipState.Launched)
+                return false;
+
+            // Can't swap if crew currently onboard exceeds new capacity
+            var testModules = (DeckModule[])ship.Modules.Clone();
+            if (tileIndex < 0 || tileIndex >= testModules.Length)
+                return false;
+            testModules[tileIndex] = module;
+
+            int newCrew = 0;
+            for (int i = 0; i < testModules.Length; i++)
+                newCrew += Ship.GetModuleCrewSlots(testModules[i]);
+            newCrew = Mathf.Max(1, newCrew);
+            if (ship.CrewCount > newCrew)
+                return false;
+
+            if (!_city.SpendWood(1)) return false;
+
+            if (!ship.SetModule(tileIndex, module))
+            {
+                _city.AddWood(1);
+                return false;
+            }
+
+            OnShipsChanged?.Invoke();
+            return true;
+        }
+
+        /// <summary>Get a ship by ID. Returns null if not found.</summary>
+        public Ship FindShipById(int shipId)
+        {
+            for (int i = 0; i < _ships.Count; i++)
+                if (_ships[i].Id == shipId) return _ships[i];
             return null;
         }
 

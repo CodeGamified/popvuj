@@ -215,11 +215,30 @@ namespace PopVuj.Crew
                     SatisfyNeed(m, simDelta);
                     if (m.TaskTimer <= 0f)
                     {
+                        // Warehouse crane operators + keeper stay permanently
+                        if (m.TargetBuilding >= 0)
+                        {
+                            var bType = _city.GetSurface(m.TargetBuilding);
+                            if (bType == CellType.Warehouse)
+                            {
+                                int bw = _city.GetBuildingWidth(m.TargetBuilding);
+                                var role = BuildingSlots.GetSlotRole(bType, m.SlotIndex, bw);
+                                if (role == SlotRole.CraneOperator || role == SlotRole.WarehouseKeeper)
+                                {
+                                    m.TaskTimer = Random.Range(TASK_DURATION_MIN, TASK_DURATION_MAX);
+                                    break;
+                                }
+                            }
+                        }
                         // Leaving a building — pick up cargo if this place produces goods
                         PickupCargoOnExit(m);
                         VacateSlot(m);
                         EnterIdle(m);
                     }
+                    break;
+
+                case MinionState.Hauling:
+                    MoveHauler(m, simDelta);
                     break;
             }
         }
@@ -230,6 +249,13 @@ namespace PopVuj.Crew
         /// </summary>
         private void PickTask(Minion m)
         {
+            // Priority 1: hauling cargo from ships to warehouse
+            if (TryAssignHaulTask(m)) return;
+
+            // Priority 1.5: staff warehouse (crane operators + keeper)
+            if (TryStaffWarehouse(m)) return;
+
+            // Priority 2: normal need-based tasks
             m.CurrentNeed = GetTopNeed(m);
             CellType[] targets = GetTargetTypes(m.CurrentNeed);
 
@@ -292,6 +318,7 @@ namespace PopVuj.Crew
             m.SlotIndex = -1;
             m.State = MinionState.Walking;
             m.FacingDirection = Random.value > 0.5f ? 1 : -1;
+            m.FacingAngle = m.FacingDirection > 0 ? 90f : -90f;
             m.EdgeDirection = m.FacingDirection;
             m.LaneTarget = Minion.GetDirectionalLane(m.FacingDirection);
             m.TaskTimer = Random.Range(WANDER_DURATION_MIN, WANDER_DURATION_MAX);
@@ -308,8 +335,18 @@ namespace PopVuj.Crew
             {
                 AdvanceOnEdge(m, step);
                 m.TaskTimer -= simDelta;
-                if (m.TaskTimer <= 0f || IsAtEdgeEnd(m))
+                if (m.TaskTimer <= 0f)
+                {
                     EnterIdle(m);
+                }
+                else if (IsAtEdgeEnd(m))
+                {
+                    // Bounce — reverse direction instead of piling up at endpoints
+                    m.EdgeDirection = -m.EdgeDirection;
+                    m.FacingDirection = -m.FacingDirection;
+                    UpdateFacingAngle(m);
+                    m.LaneTarget = WalkEdge.RightHandLane(m.EdgeDirection);
+                }
                 return;
             }
 
@@ -406,7 +443,19 @@ namespace PopVuj.Crew
             int facing = m.CurrentEdge.GetFacing(m.EdgeDirection);
             if (facing != 0) m.FacingDirection = facing;
 
+            UpdateFacingAngle(m);
             m.LaneTarget = WalkEdge.RightHandLane(m.EdgeDirection);
+        }
+
+        /// <summary>
+        /// Compute FacingAngle from the minion's current edge + edge direction.
+        /// Y-rotation: 90 = +X (right), -90 = -X (left), 0 = +Z (away), 180 = -Z (toward camera).
+        /// </summary>
+        private static void UpdateFacingAngle(Minion m)
+        {
+            if (m.CurrentEdge == null) return;
+            var dir = m.CurrentEdge.Dir * m.EdgeDirection;
+            m.FacingAngle = Mathf.Atan2(dir.x, dir.y) * Mathf.Rad2Deg;
         }
 
         private void EnterIdle(Minion m)
@@ -444,6 +493,11 @@ namespace PopVuj.Crew
                 case CellType.Shipyard:
                 case CellType.Pier:
                     // No personal need reduction — harbor work is purely economic
+                    break;
+                case CellType.Warehouse:
+                    // Warehouse staff get slow need reduction so they stay healthy on shift
+                    m.Fatigue = Mathf.Clamp01(m.Fatigue - rate * 0.5f);
+                    m.Hunger = Mathf.Clamp01(m.Hunger - rate * 0.3f);
                     break;
             }
         }
@@ -510,6 +564,231 @@ namespace PopVuj.Crew
         }
 
         // ═══════════════════════════════════════════════════════════════
+        // HAULING — minions shuttle cargo between crane and warehouse
+        // ═══════════════════════════════════════════════════════════════
+
+        private const int MAX_ACTIVE_HAULERS = 6;
+
+        private int CountActiveHaulers()
+        {
+            int count = 0;
+            for (int i = 0; i < _minions.Count; i++)
+                if (_minions[i].State == MinionState.Hauling) count++;
+            return count;
+        }
+
+        /// <summary>Find the first Warehouse building origin, or -1.</summary>
+        private int FindWarehouseOrigin()
+        {
+            for (int i = 0; i < _city.Width; i++)
+            {
+                int origin = _city.GetOwner(i);
+                if (origin != i) continue;
+                if (_city.GetSurface(i) == CellType.Warehouse) return origin;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Fill unstaffed warehouse crane-operator and keeper slots.
+        /// These roles stay permanently once assigned.
+        /// </summary>
+        private bool TryStaffWarehouse(Minion m)
+        {
+            int warehouse = FindWarehouseOrigin();
+            if (warehouse < 0) return false;
+            if (!_occupancy.TryGetValue(warehouse, out var slots)) return false;
+
+            int bw = _city.GetBuildingWidth(warehouse);
+            int staffSlots = bw + 1; // crane operators (0..bw-1) + keeper (bw)
+
+            for (int s = 0; s < staffSlots && s < slots.Length; s++)
+            {
+                if (slots[s]) continue; // already occupied
+
+                m.TargetBuilding = warehouse;
+                m.SlotIndex = s;
+                OccupySlot(warehouse, s);
+                m.State = MinionState.Walking;
+                m.CurrentNeed = MinionNeed.Work;
+
+                float destProg;
+                var destEdge = _graph.FindEdgeForBuilding(_city, warehouse, out destProg);
+                if (m.CurrentEdge != null && destEdge != null
+                    && _graph.PlanRoute(m.CurrentEdge, m.EdgeProgress, destEdge, destProg, m.Route))
+                {
+                    m.RouteIndex = 0;
+                    UpdateEdgeDirection(m);
+                    return true;
+                }
+
+                // Can't route — cancel
+                VacateSlot(m);
+                break;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Attempt to assign a haul task: carry cargo from a ship's crane to the warehouse.
+        /// Returns true if a task was assigned.
+        /// </summary>
+        private bool TryAssignHaulTask(Minion m)
+        {
+            if (_harbor == null) return false;
+            if (CountActiveHaulers() >= MAX_ACTIVE_HAULERS) return false;
+
+            int warehouse = FindWarehouseOrigin();
+            if (warehouse < 0) return false;
+
+            int craneSlot = _harbor.FindCraneWithUnloadingShip();
+            if (craneSlot < 0) return false;
+
+            // Assign haul: crane → warehouse
+            m.HaulSource = craneSlot;
+            m.HaulDestination = warehouse;
+            m.HaulPhase = HaulPhase.GoingToSource;
+            m.State = MinionState.Hauling;
+            m.CurrentNeed = MinionNeed.Haul;
+            m.TargetBuilding = Minion.NO_TARGET;
+            m.SlotIndex = -1;
+
+            // Plan route to crane
+            float sourceProg;
+            var sourceEdge = _graph.FindEdgeForCell(_city, craneSlot, out sourceProg);
+            if (m.CurrentEdge != null && sourceEdge != null
+                && _graph.PlanRoute(m.CurrentEdge, m.EdgeProgress, sourceEdge, sourceProg, m.Route))
+            {
+                m.RouteIndex = 0;
+                UpdateEdgeDirection(m);
+                return true;
+            }
+
+            // Can't route — cancel
+            m.State = MinionState.Idle;
+            m.Route.Clear();
+            return false;
+        }
+
+        /// <summary>
+        /// Hauling movement — two-phase: walk to crane, pick up, walk to warehouse, deposit.
+        /// Uses the same route-following as MoveMinion but with haul phase transitions.
+        /// </summary>
+        private void MoveHauler(Minion m, float simDelta)
+        {
+            float step = m.WalkSpeed * simDelta;
+
+            // Check if we've arrived at current destination (route exhausted)
+            if (m.Route.Count == 0 || m.RouteIndex >= m.Route.Count)
+            {
+                if (m.HaulPhase == HaulPhase.GoingToSource)
+                {
+                    // Arrived at crane — pick up cargo from ship
+                    bool pickedUp = false;
+                    if (_harbor != null)
+                    {
+                        var ship = _harbor.GetUnloadingShipAtCrane(m.HaulSource);
+                        if (ship != null && _harbor.TakeCargoUnit(ship))
+                        {
+                            m.PickupCargo(ship.HoldCargoKind != CargoKind.None
+                                ? ship.HoldCargoKind
+                                : Ship.GetRouteCargoKind(ship.Route));
+                            pickedUp = true;
+                        }
+                    }
+
+                    if (!pickedUp)
+                    {
+                        // No cargo available — go idle
+                        EnterIdle(m);
+                        return;
+                    }
+
+                    // Now route to warehouse
+                    m.HaulPhase = HaulPhase.GoingToDestination;
+                    float destProg;
+                    var destEdge = _graph.FindEdgeForBuilding(_city, m.HaulDestination, out destProg);
+                    if (m.CurrentEdge != null && destEdge != null
+                        && _graph.PlanRoute(m.CurrentEdge, m.EdgeProgress, destEdge, destProg, m.Route))
+                    {
+                        m.RouteIndex = 0;
+                        UpdateEdgeDirection(m);
+                    }
+                    else
+                    {
+                        DepositCargo(m);
+                        EnterIdle(m);
+                    }
+                }
+                else // GoingToDestination — arrived at warehouse
+                {
+                    DepositCargo(m);
+                    EnterIdle(m);
+                }
+                return;
+            }
+
+            // Follow route steps (same logic as MoveMinion)
+            var rs = m.Route[m.RouteIndex];
+
+            if (m.CurrentEdge != rs.Edge)
+            {
+                m.CurrentEdge = rs.Edge;
+                m.EdgeProgress = rs.Edge.Project(m.X, m.RenderZ);
+                UpdateEdgeDirection(m);
+            }
+
+            float dist = Mathf.Abs(rs.TargetProgress - m.EdgeProgress);
+            if (dist <= WAYPOINT_ARRIVE)
+            {
+                m.EdgeProgress = rs.TargetProgress;
+                m.RouteIndex++;
+
+                if (m.RouteIndex < m.Route.Count)
+                {
+                    var next = m.Route[m.RouteIndex];
+                    if (m.CurrentEdge != next.Edge)
+                    {
+                        bool atA = rs.TargetProgress < 0.01f;
+                        WalkNode arrived = atA ? rs.Edge.A : rs.Edge.B;
+                        m.CurrentEdge = next.Edge;
+                        m.EdgeProgress = next.Edge.ProgressAt(arrived);
+                    }
+                    UpdateEdgeDirection(m);
+                }
+            }
+            else
+            {
+                AdvanceOnEdge(m, step);
+            }
+        }
+
+        /// <summary>Deposit carried cargo into city resources (at warehouse).</summary>
+        private void DepositCargo(Minion m)
+        {
+            if (m.Cargo.IsEmpty) return;
+            var kind = m.DropCargo();
+            switch (kind)
+            {
+                case CargoKind.Log:
+                case CargoKind.Plank:
+                    _city.AddWood(1);
+                    break;
+                case CargoKind.Stone:
+                    _city.AddStone(1);
+                    break;
+                case CargoKind.Grain:
+                case CargoKind.Fish:
+                case CargoKind.Water:
+                    _city.AddFood(1);
+                    break;
+                default: // Crate, TradeCrate, ExoticGoods, Rope, etc.
+                    _city.AddGoods(1);
+                    break;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
         // TRAFFIC — lane avoidance & congestion
         // ═══════════════════════════════════════════════════════════════
 
@@ -565,7 +844,7 @@ namespace PopVuj.Crew
 
                     // Congestion slowdown — walking same direction behind a slow hauler
                     bool blockerSlow = blocker.HasCart || !blocker.Cargo.IsEmpty;
-                    if (blockerSlow && yielder.State == MinionState.Walking
+                    if (blockerSlow && (yielder.State == MinionState.Walking || yielder.State == MinionState.Hauling)
                         && yielder.FacingDirection == blocker.FacingDirection
                         && !CanShiftLane(yielder, blocker))
                     {
@@ -741,6 +1020,23 @@ namespace PopVuj.Crew
                         UpdateEdgeDirection(m);
                     }
                 }
+
+                // Re-plan route if hauling cargo
+                if (m.State == MinionState.Hauling)
+                {
+                    float destProg;
+                    WalkEdge destEdge;
+                    if (m.HaulPhase == HaulPhase.GoingToSource)
+                        destEdge = _graph.FindEdgeForCell(_city, m.HaulSource, out destProg);
+                    else
+                        destEdge = _graph.FindEdgeForBuilding(_city, m.HaulDestination, out destProg);
+                    if (destEdge != null
+                        && _graph.PlanRoute(m.CurrentEdge, m.EdgeProgress, destEdge, destProg, m.Route))
+                    {
+                        m.RouteIndex = 0;
+                        UpdateEdgeDirection(m);
+                    }
+                }
             }
         }
 
@@ -772,7 +1068,7 @@ namespace PopVuj.Crew
                 case MinionNeed.Hunger: return new[] { CellType.Farm, CellType.Market };
                 case MinionNeed.Faith:  return new[] { CellType.Chapel };
                 case MinionNeed.Work:   return new[] { CellType.Workshop, CellType.Farm,
-                                                       CellType.Shipyard, CellType.Pier };
+                                                       CellType.Shipyard, CellType.Pier, CellType.Warehouse };
                 default:                return System.Array.Empty<CellType>();
             }
         }

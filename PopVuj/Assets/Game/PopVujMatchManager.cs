@@ -344,6 +344,15 @@ namespace PopVuj.Game
             return 1;
         }
 
+        /// <summary>Build a warehouse at slot. Costs 4 wood. Returns 1=success.</summary>
+        public int BuildWarehouse(int slot)
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (!_city.SpendWood(4)) return 0;
+            if (!_city.PlaceBuilding(slot, CellType.Warehouse)) { _city.AddWood(4); return 0; }
+            return 1;
+        }
+
         /// <summary>Build a pier at slot. Costs 2 wood. Must be contiguous from shore. Returns 1=success.</summary>
         public int BuildPier(int slot)
         {
@@ -405,6 +414,30 @@ namespace PopVuj.Game
             Faith = Mathf.Clamp01(Faith + 0.05f);
             OnFaithChanged?.Invoke(Faith);
             return 1;
+        }
+
+        /// <summary>
+        /// Set a deck module on a docked ship. Costs 1 wood.
+        /// packed = ship_id*100 + tile*10 + module. Returns 1=success.
+        /// </summary>
+        public int SetShipModule(int shipId, int tileIndex, int moduleType)
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (_harbor == null) return 0;
+            if (moduleType < 0 || moduleType > 9) return 0;
+            return _harbor.SetShipModule(shipId, tileIndex, (DeckModule)moduleType) ? 1 : 0;
+        }
+
+        /// <summary>
+        /// Query what module is at a given tile on a ship.
+        /// Returns the DeckModule enum value (0-9), or -1 if invalid.
+        /// </summary>
+        public int GetShipModule(int shipId, int tileIndex)
+        {
+            if (_harbor == null) return -1;
+            var ship = _harbor.FindShipById(shipId);
+            if (ship == null) return -1;
+            return (int)ship.GetModule(tileIndex);
         }
 
         // ═══════════════════════════════════════════════════════════════
