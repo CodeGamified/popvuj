@@ -35,8 +35,8 @@ namespace PopVuj.Game
         private bool _dirty = true;
 
         // Constants matching CityRenderer
-        private const float RoadH = 0.15f;
-        private const float BuildingZ = 0.5f;
+        private const float RoadH = 0.3f;
+        private const float BuildingZ = 1.0f;
 
         public void Initialize(CityGrid city)
         {
@@ -86,7 +86,14 @@ namespace PopVuj.Game
                 float originX = i * CityRenderer.CellSize;
 
                 // ── Surface building interior ───────────────────
-                var bldgBP = new StructureBlueprint(type, bw, originX, RoadH, BuildingZ);
+                PierFixture[] fixtures = null;
+                if (type == CellType.Pier)
+                {
+                    fixtures = new PierFixture[bw];
+                    for (int f = 0; f < bw; f++)
+                        fixtures[f] = _city.GetPierFixture(i + f);
+                }
+                var bldgBP = new StructureBlueprint(type, bw, originX, RoadH, BuildingZ, fixtures);
                 var bldgResult = ProceduralAssembler.Build(bldgBP, _structurePalette);
                 if (bldgResult.IsValid)
                 {

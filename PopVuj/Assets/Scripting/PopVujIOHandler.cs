@@ -131,6 +131,51 @@ namespace PopVuj.Scripting
                 case PopVujOpCode.GET_TREES:
                     state.SetRegister(0, _city.CountSurface(CellType.Tree));
                     break;
+
+                // ── Harbor queries ───────────────────────────────
+
+                case PopVujOpCode.GET_SHIPS:
+                    state.SetRegister(0, _match.ShipCount);
+                    break;
+                case PopVujOpCode.GET_SHIPS_DOCKED:
+                    state.SetRegister(0, _match.DockedShips);
+                    break;
+                case PopVujOpCode.GET_SHIPS_AT_SEA:
+                    state.SetRegister(0, _match.ShipsAtSea);
+                    break;
+                case PopVujOpCode.GET_HARBOR_WORKERS:
+                    state.SetRegister(0, _match.HarborWorkers);
+                    break;
+                case PopVujOpCode.GET_TRADE_INCOME:
+                    state.SetRegister(0, _match.TradeIncome);
+                    break;
+
+                // ── Harbor commands ──────────────────────────────
+
+                case PopVujOpCode.BUILD_SHIPYARD:
+                    state.SetRegister(0, _match.BuildShipyard((int)state.GetRegister(0)));
+                    break;
+                case PopVujOpCode.BUILD_PIER:
+                    state.SetRegister(0, _match.BuildPier((int)state.GetRegister(0)));
+                    break;
+                case PopVujOpCode.BUILD_CRANE:
+                    state.SetRegister(0, _match.BuildCrane((int)state.GetRegister(0)));
+                    break;
+                case PopVujOpCode.BUILD_SHIP:
+                    state.SetRegister(0, _match.BuildShipCmd((int)state.GetRegister(0)));
+                    break;
+                case PopVujOpCode.LAUNCH_SHIP:
+                    state.SetRegister(0, _match.LaunchShip());
+                    break;
+                case PopVujOpCode.SEND_TRADE:
+                    state.SetRegister(0, _match.SendTrade((int)state.GetRegister(0)));
+                    break;
+                case PopVujOpCode.REPAIR_SHIP:
+                    state.SetRegister(0, _match.RepairShip());
+                    break;
+                case PopVujOpCode.BLESS_SHIP:
+                    state.SetRegister(0, _match.BlessShip());
+                    break;
             }
         }
 

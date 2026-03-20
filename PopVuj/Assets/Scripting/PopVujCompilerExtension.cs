@@ -53,6 +53,23 @@ namespace PopVuj.Scripting
         SHRINK_BUILDING  = 28,  // shrink_building(slot) → 1=ok (+1 wood)
         GET_WOOD         = 29,  // get_wood() → wood count
         GET_TREES        = 30,  // get_trees() → tree count
+
+        // ── Harbor queries ────────────────────────────────────────
+        GET_SHIPS        = 31,  // get_ships() → total ships
+        GET_SHIPS_DOCKED = 32,  // get_ships_docked() → ships at pier
+        GET_SHIPS_AT_SEA = 33,  // get_ships_at_sea() → ships on voyages
+        GET_HARBOR_WORKERS = 34, // get_harbor_workers() → minions in harbor roles
+        GET_TRADE_INCOME = 35,  // get_trade_income() → cumulative trade value
+
+        // ── Harbor commands ───────────────────────────────────────
+        BUILD_SHIPYARD   = 36,  // build_shipyard(slot) → 1=ok (costs 3 wood)
+        BUILD_PIER       = 37,  // build_pier(slot) → 1=ok (costs 2 wood, contiguous)
+        BUILD_CRANE      = 38,  // build_crane(slot) → 1=ok (costs 3 wood, installs crane fixture on pier slot)
+        BUILD_SHIP       = 39,  // build_ship(width) → 1=ok (costs scale with width)
+        LAUNCH_SHIP      = 40,  // launch_ship() → 1=ok
+        SEND_TRADE       = 41,  // send_trade(route) → 1=ok (0-4)
+        REPAIR_SHIP      = 42,  // repair_ship() → 1=ok (costs 1 wood)
+        BLESS_SHIP       = 43,  // bless_ship() → 1=ok
     }
 
     /// <summary>
@@ -183,6 +200,59 @@ namespace PopVuj.Scripting
                     return true;
                 case "get_trees":
                     Emit(ctx, PopVujOpCode.GET_TREES, sourceLine, "get_trees → R0");
+                    return true;
+
+                // ── Harbor queries ──────────────────────────────────────
+                case "get_ships":
+                    Emit(ctx, PopVujOpCode.GET_SHIPS, sourceLine, "get_ships → R0");
+                    return true;
+                case "get_ships_docked":
+                    Emit(ctx, PopVujOpCode.GET_SHIPS_DOCKED, sourceLine, "get_ships_docked → R0");
+                    return true;
+                case "get_ships_at_sea":
+                    Emit(ctx, PopVujOpCode.GET_SHIPS_AT_SEA, sourceLine, "get_ships_at_sea → R0");
+                    return true;
+                case "get_harbor_workers":
+                    Emit(ctx, PopVujOpCode.GET_HARBOR_WORKERS, sourceLine, "get_harbor_workers → R0");
+                    return true;
+                case "get_trade_income":
+                    Emit(ctx, PopVujOpCode.GET_TRADE_INCOME, sourceLine, "get_trade_income → R0");
+                    return true;
+
+                // ── Harbor commands ─────────────────────────────────────
+                case "build_shipyard":
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    Emit(ctx, PopVujOpCode.BUILD_SHIPYARD, sourceLine, "build_shipyard(R0=slot) → R0");
+                    return true;
+                case "build_pier":
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    Emit(ctx, PopVujOpCode.BUILD_PIER, sourceLine, "build_pier(R0=slot) → R0");
+                    return true;
+                case "build_crane":
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    Emit(ctx, PopVujOpCode.BUILD_CRANE, sourceLine, "build_crane(R0=slot) → R0");
+                    return true;
+                case "build_ship":
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    Emit(ctx, PopVujOpCode.BUILD_SHIP, sourceLine, "build_ship(R0=width) → R0");
+                    return true;
+                case "launch_ship":
+                    Emit(ctx, PopVujOpCode.LAUNCH_SHIP, sourceLine, "launch_ship → R0");
+                    return true;
+                case "send_trade":
+                    if (args != null && args.Count > 0)
+                        args[0].Compile(ctx);
+                    Emit(ctx, PopVujOpCode.SEND_TRADE, sourceLine, "send_trade(R0=route) → R0");
+                    return true;
+                case "repair_ship":
+                    Emit(ctx, PopVujOpCode.REPAIR_SHIP, sourceLine, "repair_ship → R0");
+                    return true;
+                case "bless_ship":
+                    Emit(ctx, PopVujOpCode.BLESS_SHIP, sourceLine, "bless_ship → R0");
                     return true;
 
                 // ── Tarot card name lookups (compile-time) ──────

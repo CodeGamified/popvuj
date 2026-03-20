@@ -16,6 +16,11 @@ namespace PopVuj.Crew
         Farmer,       // tending crops on a farm
         Merchant,     // selling at a market stall
         Caretaker,    // maintaining a fountain
+        Foreman,      // supervises shipyard construction
+        Shipwright,   // builds/repairs ships at shipyard
+        Docker,       // carries cargo along the pier
+        CraneOperator,// operates a pier crane
+        Sailor,       // crews a ship (boards vessel, leaves road)
     }
 
     /// <summary>
@@ -44,6 +49,8 @@ namespace PopVuj.Crew
                 case CellType.Farm:     return buildingWidth * 2;
                 case CellType.Market:   return 1 + buildingWidth;       // 1 vendor + stalls
                 case CellType.Fountain: return 1;
+                case CellType.Shipyard: return 1 + buildingWidth * 2;   // 1 foreman + shipwrights
+                case CellType.Pier:     return buildingWidth;           // 1 slot per tile (role depends on fixture)
                 default:                return 0;
             }
         }
@@ -59,7 +66,21 @@ namespace PopVuj.Crew
                 case CellType.Farm:     return SlotRole.Farmer;
                 case CellType.Market:   return SlotRole.Merchant;
                 case CellType.Fountain: return SlotRole.Caretaker;
+                case CellType.Shipyard: return slotIndex == 0 ? SlotRole.Foreman : SlotRole.Shipwright;
+                case CellType.Pier:     return SlotRole.Docker;
                 default:                return SlotRole.Resident;
+            }
+        }
+
+        /// <summary>Get the slot role for a pier tile with a specific fixture.</summary>
+        public static SlotRole GetPierSlotRole(PierFixture fixture)
+        {
+            switch (fixture)
+            {
+                case PierFixture.Crane:       return SlotRole.CraneOperator;
+                case PierFixture.Cannon:      return SlotRole.Docker; // reuse for now
+                case PierFixture.FishingPole: return SlotRole.Docker; // reuse for now
+                default:                      return SlotRole.Docker;
             }
         }
     }

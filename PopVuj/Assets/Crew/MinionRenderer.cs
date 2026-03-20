@@ -28,14 +28,14 @@ namespace PopVuj.Crew
 
         // ── Minion dimensions ───────────────────────────────────
 
-        private const float MinionW = 0.08f;
-        private const float MinionH = 0.14f;
-        private const float CartW   = 0.18f;           // wider body for cart-pullers
-        private const float CartH   = 0.12f;           // slightly shorter (hunched under load)
-        private const float CartDepth = 0.12f;          // thicker Z for the cart body
-        private const float RoadY = 0.15f;              // matches CityRenderer RoadH
-        private const float MinionZ = 0.25f;            // center road lane Z
-        private const float InBuildingZ = 0.35f;        // slightly in front of building face
+        private const float MinionW = 0.16f;
+        private const float MinionH = 0.28f;
+        private const float CartW   = 0.36f;           // wider body for cart-pullers
+        private const float CartH   = 0.24f;           // slightly shorter (hunched under load)
+        private const float CartDepth = 0.24f;          // thicker Z for the cart body
+        private const float RoadY = 0.3f;              // matches CityRenderer RoadH
+        private const float MinionZ = 0.5f;            // rendering Z base (SyncWorldPositions compensates)
+        private const float InBuildingZ = 0.7f;        // slightly in front of building face
 
         // ── Color palette ───────────────────────────────────────
 
@@ -47,6 +47,8 @@ namespace PopVuj.Crew
         private static readonly Color PrayColor = new Color(0.90f, 0.85f, 0.50f);
         private static readonly Color RestColor = new Color(0.55f, 0.50f, 0.65f);
         private static readonly Color EatColor  = new Color(0.60f, 0.75f, 0.45f);
+        private static readonly Color HarborColor = new Color(0.40f, 0.55f, 0.65f);
+        private static readonly Color SailorColor = new Color(0.35f, 0.45f, 0.60f);
 
         public void Initialize(MinionManager manager, CityGrid city)
         {
@@ -99,10 +101,10 @@ namespace PopVuj.Crew
                 }
                 else
                 {
-                    // Walking or idle — on the road surface, lane-offset on Z
+                    // Walking or idle — on the road surface
                     x = m.X;
                     y = RoadY + (m.HasCart ? CartH : MinionH) * 0.5f;
-                    z = MinionZ + m.Lane;
+                    z = m.RenderZ;
 
                     if (m.HasCart)
                     {
@@ -212,6 +214,25 @@ namespace PopVuj.Crew
                     return startX + buildingW * 0.05f + stallSpacing * (stallIndex + 0.5f);
                 }
 
+                case CellType.Shipyard:
+                {
+                    // Foreman at left (slot 0), shipwrights along the drydock
+                    if (slotIndex == 0)
+                        return startX + buildingW * 0.10f;
+                    int wrightCount = totalSlots - 1;
+                    float wrightRegion = buildingW * 0.8f;
+                    float wrightSpacing = wrightRegion / Mathf.Max(1, wrightCount);
+                    return startX + buildingW * 0.15f + wrightSpacing * (slotIndex - 1 + 0.5f);
+                }
+
+                case CellType.Pier:
+                {
+                    // Dockers spread along the pier
+                    float pierRegion = buildingW * 0.9f;
+                    float pierSpacing = pierRegion / Mathf.Max(1, totalSlots);
+                    return startX + buildingW * 0.05f + pierSpacing * (slotIndex + 0.5f);
+                }
+
                 default:
                 {
                     // Generic even distribution
@@ -237,30 +258,39 @@ namespace PopVuj.Crew
                 case CellType.Chapel:
                     // Preacher stands at lectern height; worshippers sit on pews
                     return role == SlotRole.Preacher
-                        ? RoadY + 0.14f  // standing at lectern
-                        : RoadY + 0.08f; // seated in pew
+                        ? RoadY + 0.28f  // standing at lectern
+                        : RoadY + 0.16f; // seated in pew
 
                 case CellType.House:
                     // Resting in beds (low position)
-                    return RoadY + 0.08f;
+                    return RoadY + 0.16f;
 
                 case CellType.Workshop:
                     // Standing at workbench
-                    return RoadY + 0.14f;
+                    return RoadY + 0.28f;
 
                 case CellType.Farm:
                     // Crouching among crops
-                    return RoadY + 0.08f;
+                    return RoadY + 0.16f;
 
                 case CellType.Market:
                     // Standing at counter
-                    return RoadY + 0.12f;
+                    return RoadY + 0.24f;
 
                 case CellType.Fountain:
-                    return RoadY + 0.10f;
+                    return RoadY + 0.20f;
+
+                case CellType.Shipyard:
+                    // Foreman stands, shipwrights work at hull height
+                    return role == SlotRole.Foreman
+                        ? RoadY + 0.28f
+                        : RoadY + 0.24f;
+
+                case CellType.Pier:
+                    return RoadY + 0.20f;
 
                 default:
-                    return RoadY + 0.10f;
+                    return RoadY + 0.20f;
             }
         }
 
@@ -273,6 +303,8 @@ namespace PopVuj.Crew
                 case CellType.House:   return RestColor;
                 case CellType.Farm:
                 case CellType.Market:  return EatColor;
+                case CellType.Shipyard:
+                case CellType.Pier:    return HarborColor;
                 default:               return WorkColor;
             }
         }

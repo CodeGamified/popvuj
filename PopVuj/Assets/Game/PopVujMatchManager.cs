@@ -69,6 +69,16 @@ namespace PopVuj.Game
         /// <summary>Total sewer den slots (derived from houses). Replaces SewerPopulation.</summary>
         public int SewerDenCount => _city.CountSewer(SewerType.Den);
 
+        // ── Harbor ─────────────────────────────────────────────────
+
+        private HarborManager _harbor;
+        public HarborManager Harbor => _harbor;
+        public int ShipCount => _harbor != null ? _harbor.ShipCount : 0;
+        public int DockedShips => _harbor != null ? _harbor.DockedShipCount : 0;
+        public int ShipsAtSea => _harbor != null ? _harbor.ShipsAtSea : 0;
+        public int HarborWorkers => _harbor != null ? _harbor.HarborWorkerCount : 0;
+        public int TradeIncome => _harbor != null ? _harbor.TradeIncome : 0;
+
         // ── Accessors ───────────────────────────────────────────
 
         public CityGrid City => _city;
@@ -96,6 +106,8 @@ namespace PopVuj.Game
             _restartDelay = restartDelay;
         }
 
+        public void SetHarbor(HarborManager harbor) { _harbor = harbor; }
+
         public void StartMatch()
         {
             _city.Reset();
@@ -113,6 +125,9 @@ namespace PopVuj.Game
 
             OnMatchStarted?.Invoke();
             OnBoardChanged?.Invoke();
+
+            // Reset harbor
+            _harbor?.ResetHarbor();
         }
 
         private void Update()
@@ -195,6 +210,13 @@ namespace PopVuj.Game
             int workshops = _city.CountSurface(CellType.Workshop);
             if (workshops > 0 && Random.value < workshops * 0.03f)
                 _city.AddWood(1);
+
+            // ── Harbor trade bonus — docked ships with crew score trade  ───
+            if (_harbor != null && _harbor.DockedShipCount > 0)
+            {
+                // Trade income adds to score
+                Score += _harbor.TradeIncome;
+            }
 
             // ── Score — one point per population per tick ───────
             Score += Population;
@@ -306,6 +328,82 @@ namespace PopVuj.Game
             if (!MatchInProgress || GameOver) return 0;
             if (!_city.ShrinkBuilding(slot)) return 0;
             _city.AddWood(1); // reclaim material
+            return 1;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // HARBOR COMMANDS — build/manage harbor infrastructure and ships
+        // ═══════════════════════════════════════════════════════════════
+
+        /// <summary>Build a shipyard at slot. Costs 3 wood. Returns 1=success.</summary>
+        public int BuildShipyard(int slot)
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (!_city.SpendWood(3)) return 0;
+            if (!_city.PlaceBuilding(slot, CellType.Shipyard)) { _city.AddWood(3); return 0; }
+            return 1;
+        }
+
+        /// <summary>Build a pier at slot. Costs 2 wood. Must be contiguous from shore. Returns 1=success.</summary>
+        public int BuildPier(int slot)
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (!_city.IsPierBuildable(slot)) return 0;
+            if (!_city.SpendWood(2)) return 0;
+            if (!_city.PlaceBuilding(slot, CellType.Pier)) { _city.AddWood(2); return 0; }
+            return 1;
+        }
+
+        /// <summary>Install a crane fixture on a pier slot. Costs 3 wood. Returns 1=success.</summary>
+        public int BuildCrane(int slot)
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (_city.GetBuildingAt(slot) != CellType.Pier) return 0;
+            if (_city.GetPierFixture(slot) != PierFixture.None) return 0;
+            if (!_city.SpendWood(3)) return 0;
+            if (!_city.SetPierFixture(slot, PierFixture.Crane)) { _city.AddWood(3); return 0; }
+            return 1;
+        }
+
+        /// <summary>Build a ship of given width. Cost scales with size. Returns 1=success.</summary>
+        public int BuildShipCmd(int width)
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (_harbor == null) return 0;
+            return _harbor.BuildShip(width) ? 1 : 0;
+        }
+
+        /// <summary>Launch the next completed ship. Returns 1=success.</summary>
+        public int LaunchShip()
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (_harbor == null) return 0;
+            return _harbor.LaunchShip() ? 1 : 0;
+        }
+
+        /// <summary>Send a docked ship on a trade route. Returns 1=success.</summary>
+        public int SendTrade(int routeId)
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (_harbor == null) return 0;
+            return _harbor.SendTrade(routeId) ? 1 : 0;
+        }
+
+        /// <summary>Repair the most damaged docked ship. Costs 1 wood. Returns 1=success.</summary>
+        public int RepairShip()
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            if (_harbor == null) return 0;
+            return _harbor.RepairShip() ? 1 : 0;
+        }
+
+        /// <summary>Bless the next departing ship — prophet effect at sea. Returns 1=success.</summary>
+        public int BlessShip()
+        {
+            if (!MatchInProgress || GameOver) return 0;
+            // Bless doubles as a faith + trade bonus for the next voyage
+            Faith = Mathf.Clamp01(Faith + 0.05f);
+            OnFaithChanged?.Invoke(Faith);
             return 1;
         }
 

@@ -14,12 +14,12 @@ namespace PopVuj.Crew
     /// The manager syncs minion count to the authoritative population integer and
     /// animates individuals walking between buildings to satisfy needs.
     ///
-    /// Movement is simple: leave building → walk left/right → enter next building.
-    /// No complex pathfinding — just horizontal movement along the road.
+    /// Movement uses an edge-based walkway graph: nodes connected by edges
+    /// (road, bridge, pier). Minions follow planned routes through
+    /// the graph, handling turns at junctions automatically.
     ///
-    /// Traffic: after movement, minions detect nearby walkers and shift lanes (Z)
-    /// to avoid overlap. Cart-pullers have a wider footprint and slow down
-    /// anyone stuck behind them, causing realistic congestion.
+    /// Traffic: minions keep right-hand travel and aggressively shift lanes
+    /// to overtake slower vehicles (carts, laden haulers).
     ///
     /// This is a C# visual layer; it does not need Python representation.
     /// </summary>
@@ -27,6 +27,7 @@ namespace PopVuj.Crew
     {
         private CityGrid _city;
         private PopVujMatchManager _match;
+        private HarborManager _harbor;
 
         private readonly List<Minion> _minions = new List<Minion>();
         private int _nextId;
@@ -52,26 +53,31 @@ namespace PopVuj.Crew
         // ── Traffic / lane tuning ───────────────────────────────
 
         private const float LANE_DRIFT_SPEED = 0.4f;     // how fast minions shift between lanes (Z units/sec)
-        private const float PROXIMITY_THRESHOLD = 0.14f;  // X distance to count as "overlapping" (slightly larger than a person)
+        private const float BRIDGE_LANE_DRIFT = 2.0f;    // faster drift on bridge for snappy turns
+        private const float PROXIMITY_THRESHOLD = 0.28f;  // travel-axis distance for overlap detection
         private const float CART_SLOWDOWN = 0.6f;         // speed multiplier when stuck behind a cart
-        // Road boundary cache (updated when grid changes)
-        private float _roadMinX;
-        private float _roadMaxX;
+        private const float WAYPOINT_ARRIVE = 0.06f;      // close enough to a waypoint target
+
+        // ── Walkway graph ───────────────────────────────────────
+        private readonly WalkGraph _graph = new WalkGraph();
+
         // ── Public API ──────────────────────────────────────────
 
         public IReadOnlyList<Minion> Minions => _minions;
+        public WalkGraph Graph => _graph;
 
-        public void Initialize(CityGrid city, PopVujMatchManager match)
+        public void Initialize(CityGrid city, PopVujMatchManager match, HarborManager harbor = null)
         {
             _city = city;
             _match = match;
+            _harbor = harbor;
 
             _city.OnGridChanged += RebuildOccupancy;
-            _city.OnGridChanged += UpdateRoadBounds;
+            _city.OnGridChanged += RebuildGraph;
             _match.OnPopulationChanged += SyncPopulation;
             _match.OnMatchStarted += OnMatchStarted;
 
-            UpdateRoadBounds();
+            RebuildGraph();
             RebuildOccupancy();
         }
 
@@ -80,7 +86,7 @@ namespace PopVuj.Crew
             if (_city != null)
             {
                 _city.OnGridChanged -= RebuildOccupancy;
-                _city.OnGridChanged -= UpdateRoadBounds;
+                _city.OnGridChanged -= RebuildGraph;
             }
             if (_match != null)
             {
@@ -98,7 +104,7 @@ namespace PopVuj.Crew
             _minions.Clear();
             _nextId = 0;
             _occupancy.Clear();
-            UpdateRoadBounds();
+            RebuildGraph();
             RebuildOccupancy();
             SyncPopulation(_match.Population);
         }
@@ -117,8 +123,19 @@ namespace PopVuj.Crew
 
         private void SpawnMinion()
         {
-            float x = Random.Range(_roadMinX + 0.1f, _roadMaxX - 0.1f);
-            _minions.Add(new Minion(_nextId++, x));
+            var edge = _graph.Edges.Count > 0 ? _graph.Edges[0] : null;
+            float minP = edge != null ? 0.1f : 0.1f;
+            float maxP = edge != null ? edge.Length - 0.1f : _city.Width * CityRenderer.CellSize - 0.1f;
+            float p = Random.Range(minP, maxP);
+            float x = edge != null ? edge.WorldAt(p).x : p;
+            var m = new Minion(_nextId++, x);
+            if (edge != null)
+            {
+                m.CurrentEdge = edge;
+                m.EdgeProgress = Mathf.Clamp(p, 0f, edge.Length);
+                m.EdgeDirection = m.FacingDirection;
+            }
+            _minions.Add(m);
         }
 
         private void DespawnMinion()
@@ -159,6 +176,9 @@ namespace PopVuj.Crew
 
             // Drift lanes toward target
             DriftLanes(simDelta);
+
+            // Sync world X/Z from walkway position
+            SyncWorldPositions();
         }
 
         private void TickNeeds()
@@ -205,7 +225,7 @@ namespace PopVuj.Crew
         }
 
         /// <summary>
-        /// Evaluate top need, find nearest building with an open slot, start walking.
+        /// Evaluate top need, find nearest building with an open slot, plan a route.
         /// If no slot available, wander.
         /// </summary>
         private void PickTask(Minion m)
@@ -243,10 +263,21 @@ namespace PopVuj.Crew
                 m.SlotIndex = bestSlot;
                 OccupySlot(bestOrigin, bestSlot);
                 m.State = MinionState.Walking;
-                float targetX = GetBuildingCenterX(bestOrigin);
-                m.FacingDirection = targetX > m.X ? 1 : -1;
-                // Switch to the directional lane for new heading
-                m.LaneTarget = Minion.GetDirectionalLane(m.FacingDirection);
+
+                // Plan route through the walkway graph
+                float destProg;
+                var destEdge = _graph.FindEdgeForBuilding(_city, bestOrigin, out destProg);
+                if (m.CurrentEdge != null && destEdge != null
+                    && _graph.PlanRoute(m.CurrentEdge, m.EdgeProgress, destEdge, destProg, m.Route))
+                {
+                    m.RouteIndex = 0;
+                    UpdateEdgeDirection(m);
+                }
+                else
+                {
+                    m.Route.Clear();
+                    EnterIdle(m);
+                }
             }
             else
             {
@@ -261,71 +292,131 @@ namespace PopVuj.Crew
             m.SlotIndex = -1;
             m.State = MinionState.Walking;
             m.FacingDirection = Random.value > 0.5f ? 1 : -1;
+            m.EdgeDirection = m.FacingDirection;
             m.LaneTarget = Minion.GetDirectionalLane(m.FacingDirection);
             m.TaskTimer = Random.Range(WANDER_DURATION_MIN, WANDER_DURATION_MAX);
+            m.Route.Clear();
+            m.RouteIndex = 0;
         }
 
         private void MoveMinion(Minion m, float simDelta)
         {
             float step = m.WalkSpeed * simDelta;
 
-            // Wandering — walk in a direction until timer expires or road edge reached
+            // ── Wandering ──
             if (m.TargetBuilding == Minion.WANDERING)
             {
-                m.X += m.FacingDirection * step;
-                m.X = Mathf.Clamp(m.X, _roadMinX, _roadMaxX);
+                AdvanceOnEdge(m, step);
                 m.TaskTimer -= simDelta;
-                if (m.TaskTimer <= 0f || m.X <= _roadMinX + 0.01f || m.X >= _roadMaxX - 0.01f)
+                if (m.TaskTimer <= 0f || IsAtEdgeEnd(m))
                     EnterIdle(m);
                 return;
             }
 
-            // No target — go idle
-            if (m.TargetBuilding < 0)
-            {
-                EnterIdle(m);
-                return;
-            }
+            if (m.TargetBuilding < 0) { EnterIdle(m); return; }
 
-            // Target building was destroyed mid-walk
+            // Target destroyed mid-walk
             if (!_occupancy.ContainsKey(m.TargetBuilding))
             {
                 m.TargetBuilding = Minion.NO_TARGET;
                 m.SlotIndex = -1;
+                m.Route.Clear();
                 EnterIdle(m);
                 return;
             }
 
-            // Walk toward target building
-            float targetX = GetBuildingCenterX(m.TargetBuilding);
-            float dx = targetX - m.X;
-            float dist = Mathf.Abs(dx);
-
-            if (dist <= step)
+            // No route or past end → enter building
+            if (m.Route.Count == 0 || m.RouteIndex >= m.Route.Count)
             {
-                // Arrived — drop cargo if this building accepts deliveries, then enter slot
                 DropCargoOnEnter(m);
-                m.X = targetX;
                 m.State = MinionState.InSlot;
                 m.TaskTimer = Random.Range(TASK_DURATION_MIN, TASK_DURATION_MAX);
+                m.Route.Clear();
+                return;
+            }
+
+            var rs = m.Route[m.RouteIndex];
+
+            // Ensure we're on the correct edge (first frame or after rebuild)
+            if (m.CurrentEdge != rs.Edge)
+            {
+                m.CurrentEdge = rs.Edge;
+                m.EdgeProgress = rs.Edge.Project(m.X, m.RenderZ);
+                UpdateEdgeDirection(m);
+            }
+
+            float dist = Mathf.Abs(rs.TargetProgress - m.EdgeProgress);
+            if (dist <= WAYPOINT_ARRIVE)
+            {
+                // Snap and advance to next step
+                m.EdgeProgress = rs.TargetProgress;
+                m.RouteIndex++;
+
+                if (m.RouteIndex < m.Route.Count)
+                {
+                    var next = m.Route[m.RouteIndex];
+                    if (m.CurrentEdge != next.Edge)
+                    {
+                        // Determine which node we arrived at
+                        bool atA = rs.TargetProgress < 0.01f;
+                        WalkNode arrived = atA ? rs.Edge.A : rs.Edge.B;
+                        m.CurrentEdge = next.Edge;
+                        m.EdgeProgress = next.Edge.ProgressAt(arrived);
+                    }
+                    UpdateEdgeDirection(m);
+                }
+                else
+                {
+                    DropCargoOnEnter(m);
+                    m.State = MinionState.InSlot;
+                    m.TaskTimer = Random.Range(TASK_DURATION_MIN, TASK_DURATION_MAX);
+                    m.Route.Clear();
+                }
             }
             else
             {
-                int oldDir = m.FacingDirection;
-                m.X += Mathf.Sign(dx) * step;
-                m.X = Mathf.Clamp(m.X, _roadMinX, _roadMaxX);
-                m.FacingDirection = dx > 0 ? 1 : -1;
-                // If direction changed mid-walk, switch to the correct lane
-                if (m.FacingDirection != oldDir)
-                    m.LaneTarget = Minion.GetDirectionalLane(m.FacingDirection);
+                AdvanceOnEdge(m, step);
             }
+        }
+
+        private static void AdvanceOnEdge(Minion m, float step)
+        {
+            if (m.CurrentEdge == null) return;
+            m.EdgeProgress += m.EdgeDirection * step;
+            m.EdgeProgress = Mathf.Clamp(m.EdgeProgress, 0f, m.CurrentEdge.Length);
+        }
+
+        private static bool IsAtEdgeEnd(Minion m)
+        {
+            if (m.CurrentEdge == null) return true;
+            return m.EdgeProgress <= 0.01f || m.EdgeProgress >= m.CurrentEdge.Length - 0.01f;
+        }
+
+        /// <summary>
+        /// Set EdgeDirection and FacingDirection based on current route step.
+        /// Also updates lane target for right-hand traffic.
+        /// </summary>
+        private void UpdateEdgeDirection(Minion m)
+        {
+            if (m.RouteIndex >= m.Route.Count) return;
+            var rs = m.Route[m.RouteIndex];
+            float diff = rs.TargetProgress - m.EdgeProgress;
+            m.EdgeDirection = diff >= 0 ? 1 : -1;
+
+            int facing = m.CurrentEdge.GetFacing(m.EdgeDirection);
+            if (facing != 0) m.FacingDirection = facing;
+
+            m.LaneTarget = WalkEdge.RightHandLane(m.EdgeDirection);
         }
 
         private void EnterIdle(Minion m)
         {
             m.State = MinionState.Idle;
             m.TaskTimer = Random.Range(IDLE_DELAY_MIN, IDLE_DELAY_MAX);
-            m.X = Mathf.Clamp(m.X, _roadMinX, _roadMaxX);
+            m.Route.Clear();
+            m.RouteIndex = 0;
+            if (m.CurrentEdge != null)
+                m.EdgeProgress = Mathf.Clamp(m.EdgeProgress, 0f, m.CurrentEdge.Length);
         }
 
         /// <summary>
@@ -348,6 +439,11 @@ namespace PopVuj.Crew
                     break;
                 case CellType.Chapel:
                     m.Faithlessness = Mathf.Clamp01(m.Faithlessness - rate);
+                    break;
+                // Harbor buildings satisfy work need (fatigue stays, but they're productive)
+                case CellType.Shipyard:
+                case CellType.Pier:
+                    // No personal need reduction — harbor work is purely economic
                     break;
             }
         }
@@ -387,6 +483,14 @@ namespace PopVuj.Crew
                     break;
                 case CellType.Fountain:
                     m.PickupCargo(CargoKind.Water);
+                    break;
+                // Shipyard workers produce planks (from wood)
+                case CellType.Shipyard:
+                    m.PickupCargo(CargoKind.Plank);
+                    break;
+                // Pier dockers carry trade crates
+                case CellType.Pier:
+                    m.PickupCargo(CargoKind.TradeCrate);
                     break;
             }
         }
@@ -432,9 +536,12 @@ namespace PopVuj.Crew
                     var b = _minions[j];
                     if (b.State == MinionState.InSlot) continue;
 
-                    // Check X proximity — are they close enough to care?
+                    // Only compare minions on the same edge
+                    if (a.CurrentEdge != b.CurrentEdge) continue;
+
+                    // Check travel-axis proximity — are they close enough to care?
                     float combinedFoot = (a.Footprint + b.Footprint) * 0.5f;
-                    float dx = Mathf.Abs(a.X - b.X);
+                    float dx = Mathf.Abs(a.EdgeProgress - b.EdgeProgress);
                     if (dx > combinedFoot + PROXIMITY_THRESHOLD) continue;
 
                     // Check lane proximity — are they in roughly the same lane?
@@ -469,8 +576,10 @@ namespace PopVuj.Crew
                         {
                             // Nudge back so we don't overtake through the hauler
                             float excess = (selfStep - blockerStep) * CART_SLOWDOWN;
-                            yielder.X -= yielder.FacingDirection * excess;
-                            yielder.X = Mathf.Clamp(yielder.X, _roadMinX, _roadMaxX);
+                            yielder.EdgeProgress -= yielder.EdgeDirection * excess;
+                            if (yielder.CurrentEdge != null)
+                                yielder.EdgeProgress = Mathf.Clamp(yielder.EdgeProgress,
+                                    0f, yielder.CurrentEdge.Length);
                         }
                         if (yielder == a) aSlowed = true;
                     }
@@ -519,7 +628,7 @@ namespace PopVuj.Crew
             return upClear || downClear;
         }
 
-        /// <summary>Is there another walking minion near this X in the candidate lane?</summary>
+        /// <summary>Is there another walking minion near this one in the candidate lane?</summary>
         private bool LaneOccupiedNear(Minion self, float candidateLane)
         {
             for (int i = 0; i < _minions.Count; i++)
@@ -527,7 +636,8 @@ namespace PopVuj.Crew
                 var other = _minions[i];
                 if (other.Id == self.Id) continue;
                 if (other.State == MinionState.InSlot) continue;
-                if (Mathf.Abs(other.X - self.X) > PROXIMITY_THRESHOLD + self.Footprint) continue;
+                if (other.CurrentEdge != self.CurrentEdge) continue;
+                if (Mathf.Abs(other.EdgeProgress - self.EdgeProgress) > PROXIMITY_THRESHOLD + self.Footprint) continue;
                 if (Mathf.Abs(other.Lane - candidateLane) < Minion.LANE_WIDTH * 0.8f)
                     return true;
             }
@@ -537,11 +647,14 @@ namespace PopVuj.Crew
         /// <summary>Smoothly drift each minion's actual lane toward its target lane.</summary>
         private void DriftLanes(float simDelta)
         {
-            float drift = LANE_DRIFT_SPEED * simDelta;
             for (int i = 0; i < _minions.Count; i++)
             {
                 var m = _minions[i];
                 if (m.State == MinionState.InSlot) continue;
+                // Use fast drift on the bridge for snappy turns
+                bool onBridge = m.CurrentEdge != null && m.CurrentEdge.IsDepthEdge;
+                float speed = onBridge ? BRIDGE_LANE_DRIFT : LANE_DRIFT_SPEED;
+                float drift = speed * simDelta;
                 float diff = m.LaneTarget - m.Lane;
                 if (Mathf.Abs(diff) < 0.001f)
                 {
@@ -560,6 +673,75 @@ namespace PopVuj.Crew
             float max = Minion.LEFT_LANE_OFFSET + Minion.MAX_LANES * Minion.LANE_WIDTH;
             float min = Minion.RIGHT_LANE_OFFSET - Minion.MAX_LANES * Minion.LANE_WIDTH;
             return Mathf.Clamp(lane, min, max);
+        }
+
+        /// <summary>
+        /// After all movement and lane drifting, write the walkway-graph position
+        /// back to the minion's world X and Lane (Z) for rendering.
+        /// </summary>
+        private void SyncWorldPositions()
+        {
+            for (int i = 0; i < _minions.Count; i++)
+            {
+                var m = _minions[i];
+                if (m.State == MinionState.InSlot) continue;
+                if (m.CurrentEdge == null) continue;
+
+                var pos = m.CurrentEdge.WorldAt(m.EdgeProgress);
+                m.X = pos.x + m.CurrentEdge.Perp.x * m.Lane;
+                m.RenderZ = pos.y + m.CurrentEdge.Perp.y * m.Lane;
+            }
+        }
+
+        /// <summary>
+        /// Rebuild the walkway graph from the current city layout.
+        /// Re-place any minions whose edges disappeared.
+        /// </summary>
+        private void RebuildGraph()
+        {
+            _graph.Build(_city);
+
+            for (int i = 0; i < _minions.Count; i++)
+            {
+                var m = _minions[i];
+
+                // InSlot: remap to the edge for their building
+                if (m.State == MinionState.InSlot)
+                {
+                    if (m.TargetBuilding >= 0)
+                    {
+                        float prog;
+                        m.CurrentEdge = _graph.FindEdgeForBuilding(_city, m.TargetBuilding, out prog);
+                    }
+                    if (m.CurrentEdge == null && _graph.Edges.Count > 0)
+                        m.CurrentEdge = _graph.Edges[0];
+                    continue;
+                }
+
+                // Walking/idle: find nearest edge
+                float progress;
+                var edge = _graph.FindNearestEdge(m.X, m.RenderZ, out progress);
+                if (edge == null && _graph.Edges.Count > 0)
+                { edge = _graph.Edges[0]; progress = 0f; }
+                if (edge == null) continue;
+
+                m.CurrentEdge = edge;
+                m.EdgeProgress = progress;
+
+                // Re-plan route if walking to a building
+                if (m.State == MinionState.Walking && m.TargetBuilding >= 0
+                    && m.TargetBuilding != Minion.WANDERING)
+                {
+                    float destProg;
+                    var destEdge = _graph.FindEdgeForBuilding(_city, m.TargetBuilding, out destProg);
+                    if (destEdge != null
+                        && _graph.PlanRoute(m.CurrentEdge, m.EdgeProgress, destEdge, destProg, m.Route))
+                    {
+                        m.RouteIndex = 0;
+                        UpdateEdgeDirection(m);
+                    }
+                }
+            }
         }
 
         // ═══════════════════════════════════════════════════════════════
@@ -589,7 +771,8 @@ namespace PopVuj.Crew
                 case MinionNeed.Rest:   return new[] { CellType.House };
                 case MinionNeed.Hunger: return new[] { CellType.Farm, CellType.Market };
                 case MinionNeed.Faith:  return new[] { CellType.Chapel };
-                case MinionNeed.Work:   return new[] { CellType.Workshop, CellType.Farm };
+                case MinionNeed.Work:   return new[] { CellType.Workshop, CellType.Farm,
+                                                       CellType.Shipyard, CellType.Pier };
                 default:                return System.Array.Empty<CellType>();
             }
         }
@@ -599,43 +782,6 @@ namespace PopVuj.Crew
             for (int i = 0; i < targets.Length; i++)
                 if (targets[i] == type) return true;
             return false;
-        }
-
-        // ═══════════════════════════════════════════════════════════════
-        // ROAD BOUNDS — minions stay on the road, not in empty wilderness
-        // ═══════════════════════════════════════════════════════════════
-
-        /// <summary>
-        /// Compute the walkable road extent from leftmost building edge
-        /// to rightmost building edge. Minions cannot wander past these.
-        /// </summary>
-        private void UpdateRoadBounds()
-        {
-            float cs = CityRenderer.CellSize;
-            int leftmost = _city.Width;
-            int rightmost = -1;
-
-            for (int i = 0; i < _city.Width; i++)
-            {
-                int origin = _city.GetOwner(i);
-                if (origin < 0) continue;
-                if (origin < leftmost) leftmost = origin;
-                int bw = _city.GetBuildingWidth(origin);
-                int end = origin + Mathf.Max(bw, 1);
-                if (end > rightmost) rightmost = end;
-            }
-
-            if (leftmost >= _city.Width || rightmost <= 0)
-            {
-                // No buildings — allow the whole strip
-                _roadMinX = 0f;
-                _roadMaxX = _city.Width * cs;
-            }
-            else
-            {
-                _roadMinX = leftmost * cs;
-                _roadMaxX = rightmost * cs;
-            }
         }
 
         // ═══════════════════════════════════════════════════════════════

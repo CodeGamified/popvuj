@@ -14,6 +14,11 @@ namespace PopVuj.Crew
         Grain,      // sack of grain from a farm
         Stone,      // quarried block (future)
         Water,      // bucket / barrel (from fountain)
+        Fish,       // silver-blue sack from fishing boats
+        Rope,       // coiled brown bundle from workshop
+        Plank,      // flat lumber stack from workshop
+        TradeCrate, // stamped crate packed for export
+        ExoticGoods,// ornate chest from distant trade
     }
 
     /// <summary>
@@ -82,47 +87,92 @@ namespace PopVuj.Crew
             {
                 case CargoKind.Log:
                     SpeedMultiplier = 0.50f;   // logs are heavy and awkward
-                    FootprintBonus  = 0.18f;   // log sticks out in front & behind
-                    VisualWidth     = 0.22f;   // long horizontal
-                    VisualHeight    = 0.04f;   // thin
-                    VisualDepth     = 0.04f;
-                    CarryOffsetY    = 0.06f;   // on shoulder
+                    FootprintBonus  = 0.36f;   // log sticks out in front & behind
+                    VisualWidth     = 0.44f;   // long horizontal
+                    VisualHeight    = 0.08f;   // thin
+                    VisualDepth     = 0.08f;
+                    CarryOffsetY    = 0.12f;   // on shoulder
                     break;
 
                 case CargoKind.Crate:
                     SpeedMultiplier = 0.65f;
-                    FootprintBonus  = 0.08f;
-                    VisualWidth     = 0.07f;
-                    VisualHeight    = 0.07f;
-                    VisualDepth     = 0.07f;
-                    CarryOffsetY    = 0.08f;   // held in front
+                    FootprintBonus  = 0.16f;
+                    VisualWidth     = 0.14f;
+                    VisualHeight    = 0.14f;
+                    VisualDepth     = 0.14f;
+                    CarryOffsetY    = 0.16f;   // held in front
                     break;
 
                 case CargoKind.Grain:
                     SpeedMultiplier = 0.70f;
-                    FootprintBonus  = 0.05f;
-                    VisualWidth     = 0.06f;
-                    VisualHeight    = 0.08f;
-                    VisualDepth     = 0.05f;
-                    CarryOffsetY    = 0.07f;   // sack over shoulder
+                    FootprintBonus  = 0.10f;
+                    VisualWidth     = 0.12f;
+                    VisualHeight    = 0.16f;
+                    VisualDepth     = 0.10f;
+                    CarryOffsetY    = 0.14f;   // sack over shoulder
                     break;
 
                 case CargoKind.Stone:
                     SpeedMultiplier = 0.40f;   // very heavy
-                    FootprintBonus  = 0.10f;
-                    VisualWidth     = 0.08f;
-                    VisualHeight    = 0.06f;
-                    VisualDepth     = 0.08f;
-                    CarryOffsetY    = 0.04f;   // low carry
+                    FootprintBonus  = 0.20f;
+                    VisualWidth     = 0.16f;
+                    VisualHeight    = 0.12f;
+                    VisualDepth     = 0.16f;
+                    CarryOffsetY    = 0.08f;   // low carry
                     break;
 
                 case CargoKind.Water:
                     SpeedMultiplier = 0.75f;
-                    FootprintBonus  = 0.04f;
-                    VisualWidth     = 0.05f;
+                    FootprintBonus  = 0.08f;
+                    VisualWidth     = 0.10f;
+                    VisualHeight    = 0.12f;
+                    VisualDepth     = 0.10f;
+                    CarryOffsetY    = 0.10f;
+                    break;
+
+                case CargoKind.Fish:
+                    SpeedMultiplier = 0.70f;
+                    FootprintBonus  = 0.10f;
+                    VisualWidth     = 0.12f;
+                    VisualHeight    = 0.14f;
+                    VisualDepth     = 0.10f;
+                    CarryOffsetY    = 0.12f;
+                    break;
+
+                case CargoKind.Rope:
+                    SpeedMultiplier = 0.72f;
+                    FootprintBonus  = 0.12f;
+                    VisualWidth     = 0.12f;
+                    VisualHeight    = 0.12f;
+                    VisualDepth     = 0.12f;
+                    CarryOffsetY    = 0.12f;
+                    break;
+
+                case CargoKind.Plank:
+                    SpeedMultiplier = 0.55f;
+                    FootprintBonus  = 0.28f;
+                    VisualWidth     = 0.36f;
                     VisualHeight    = 0.06f;
-                    VisualDepth     = 0.05f;
-                    CarryOffsetY    = 0.05f;
+                    VisualDepth     = 0.10f;
+                    CarryOffsetY    = 0.12f;   // on shoulder like a log
+                    break;
+
+                case CargoKind.TradeCrate:
+                    SpeedMultiplier = 0.60f;
+                    FootprintBonus  = 0.16f;
+                    VisualWidth     = 0.16f;
+                    VisualHeight    = 0.16f;
+                    VisualDepth     = 0.16f;
+                    CarryOffsetY    = 0.16f;
+                    break;
+
+                case CargoKind.ExoticGoods:
+                    SpeedMultiplier = 0.65f;
+                    FootprintBonus  = 0.14f;
+                    VisualWidth     = 0.14f;
+                    VisualHeight    = 0.14f;
+                    VisualDepth     = 0.12f;
+                    CarryOffsetY    = 0.14f;
                     break;
 
                 default: // None
@@ -149,6 +199,11 @@ namespace PopVuj.Crew
                 case CargoKind.Grain: return new UnityEngine.Color(0.80f, 0.72f, 0.35f); // golden wheat
                 case CargoKind.Stone: return new UnityEngine.Color(0.45f, 0.45f, 0.42f); // grey
                 case CargoKind.Water: return new UnityEngine.Color(0.25f, 0.50f, 0.75f); // blue
+                case CargoKind.Fish:  return new UnityEngine.Color(0.55f, 0.65f, 0.80f); // silver-blue
+                case CargoKind.Rope:  return new UnityEngine.Color(0.50f, 0.38f, 0.18f); // hemp brown
+                case CargoKind.Plank: return new UnityEngine.Color(0.60f, 0.45f, 0.22f); // fresh lumber
+                case CargoKind.TradeCrate:  return new UnityEngine.Color(0.50f, 0.35f, 0.15f); // stamped wood
+                case CargoKind.ExoticGoods: return new UnityEngine.Color(0.75f, 0.55f, 0.20f); // golden ornate
                 default:              return UnityEngine.Color.clear;
             }
         }

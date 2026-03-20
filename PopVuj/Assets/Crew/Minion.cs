@@ -57,11 +57,13 @@ namespace PopVuj.Crew
         public int FacingDirection;    // -1 = left, 1 = right
 
         // ── Lane / traffic ──────────────────────────────────────
-        // Lane is a Z offset from the center road line. Minions shift
-        // lanes to avoid walking through each other. Positive = closer
-        // to camera, negative = further away.
-        public float Lane;             // current Z offset (world units)
-        public float LaneTarget;       // desired Z offset we're drifting toward
+        // Lane is a perpendicular offset from the segment's lane center.
+        // Minions shift lanes to avoid walking through each other.
+        public float Lane;             // perpendicular offset (simulation)
+        public float LaneTarget;       // desired offset we're drifting toward
+
+        // ── Rendering output (written by SyncWorldPositions) ────
+        public float RenderZ;          // final world Z for rendering
 
         // ── Cargo ───────────────────────────────────────────────
         // Transient hauling state. Cargo is picked up at a source,
@@ -80,18 +82,38 @@ namespace PopVuj.Crew
         public const int WANDERING = -2;
 
         // ── Lane constants (shared) ─────────────────────────────
-        public const float LANE_WIDTH = 0.06f;    // Z spacing between avoidance sub-lanes
+        public const float LANE_WIDTH = 0.12f;    // Z spacing between avoidance sub-lanes
         public const int   MAX_LANES  = 3;        // ±3 sub-lanes from directional home lane
-        public const float PERSON_FOOTPRINT = 0.10f;
-        public const float CART_FOOTPRINT   = 0.25f;
+        public const float PERSON_FOOTPRINT = 0.20f;
+        public const float CART_FOOTPRINT   = 0.50f;
 
         // ── Directional lane offsets ────────────────────────────
-        // Road Z depth runs from 0 (road surface) to ~0.5 (building face).
-        // MinionZ = 0.25 is the center. These offsets are relative to MinionZ.
-        // Right-going minions walk closer to camera (negative Z offset from center),
-        // left-going minions walk closer to buildings (positive Z offset from center).
-        public const float RIGHT_LANE_OFFSET = -0.08f;  // ~33% toward camera
-        public const float LEFT_LANE_OFFSET  =  0.08f;  // ~66% toward buildings
+        // Road block centered at Z=0, spans -0.5 to 0.5.
+        // These offsets are relative to the segment's lane center.
+        // Right-going minions walk closer to camera (negative Z offset),
+        // left-going minions walk closer to buildings (positive Z offset).
+        public const float RIGHT_LANE_OFFSET = -0.16f;
+        public const float LEFT_LANE_OFFSET  =  0.16f;
+
+        // ── Pier lane offset (legacy, unused by walkway system) ─
+        public const float PIER_LANE_OFFSET  =  0.50f;
+
+        // ── Walkway navigation state ────────────────────────────
+        /// <summary>Current edge the minion is on (null = unplaced).</summary>
+        public WalkEdge CurrentEdge;
+
+        /// <summary>Progress along the current edge (0 = node A, Length = node B).</summary>
+        public float EdgeProgress;
+
+        /// <summary>+1 = toward node B, -1 = toward node A.</summary>
+        public int EdgeDirection;
+
+        /// <summary>Planned route — list of edge steps to follow.</summary>
+        public readonly System.Collections.Generic.List<RouteStep> Route
+            = new System.Collections.Generic.List<RouteStep>();
+
+        /// <summary>Index into Route of the current step being pursued.</summary>
+        public int RouteIndex;
 
         // ── Derived properties ──────────────────────────────────
 
@@ -144,6 +166,12 @@ namespace PopVuj.Crew
                 : 0.30f + Random.Range(0f, 0.15f);
 
             Cargo = Cargo.Empty;
+
+            // Route starts empty — MinionManager places minion on the graph
+            CurrentEdge = null;
+            EdgeProgress = 0f;
+            EdgeDirection = FacingDirection;
+            RouteIndex = 0;
 
             // Start in the directional home lane with a small random jitter
             Lane = GetDirectionalLane(FacingDirection);

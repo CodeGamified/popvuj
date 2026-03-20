@@ -73,6 +73,8 @@ namespace PopVuj.Core
         private MinionManager _minionManager;
         private MinionRenderer _minionRenderer;
         private StructureRenderer _structureRenderer;
+        private HarborManager _harborManager;
+        private ShipRenderer _shipRenderer;
         private PopVujProgram _playerProgram;
         private PopVujFateController _fateController;
         private PopVujTUIManager _tuiManager;
@@ -130,7 +132,10 @@ namespace PopVuj.Core
             // 5. Match manager (needs city)
             CreateMatchManager();
 
-            // 5b. Minion manager (needs city + match)
+            // 5a. Harbor manager (needs city + match)
+            CreateHarborManager();
+
+            // 5b. Minion manager (needs city + match + harbor)
             CreateMinionManager();
 
             // 6. Visual renderer (needs city)
@@ -141,6 +146,9 @@ namespace PopVuj.Core
 
             // 6b. Minion renderer (needs minion manager + city)
             CreateMinionRenderer();
+
+            // 6c. Ship renderer (needs harbor manager + city)
+            CreateShipRenderer();
 
             // 7. Input provider
             CreateInputProvider();
@@ -190,7 +198,7 @@ namespace PopVuj.Core
             cam.orthographic = false;
             cam.fieldOfView = 50f;
             var center = CityCenter();
-            cam.transform.position = center + new Vector3(0f, 2f, -8f);
+            cam.transform.position = center + new Vector3(0f, 4f, -16f);
             cam.transform.LookAt(center, Vector3.up);
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.02f, 0.01f, 0.04f); // dark indigo — night sky
@@ -283,8 +291,21 @@ namespace PopVuj.Core
         {
             var go = new GameObject("MinionManager");
             _minionManager = go.AddComponent<MinionManager>();
-            _minionManager.Initialize(_city, _match);
-            Log($"Created MinionManager (slot-based minion AI)");
+            _minionManager.Initialize(_city, _match, _harborManager);
+            Log($"Created MinionManager (slot-based minion AI + harbor jobs)");
+        }
+
+        // =================================================================
+        // HARBOR MANAGER
+        // =================================================================
+
+        private void CreateHarborManager()
+        {
+            var go = new GameObject("HarborManager");
+            _harborManager = go.AddComponent<HarborManager>();
+            _harborManager.Initialize(_city, _match);
+            _match.SetHarbor(_harborManager);
+            Log("Created HarborManager (ships, trade routes, crane ops)");
         }
 
         // =================================================================
@@ -297,6 +318,18 @@ namespace PopVuj.Core
             _minionRenderer = go.AddComponent<MinionRenderer>();
             _minionRenderer.Initialize(_minionManager, _city);
             Log("Created MinionRenderer");
+        }
+
+        // =================================================================
+        // SHIP RENDERER
+        // =================================================================
+
+        private void CreateShipRenderer()
+        {
+            var go = new GameObject("ShipRenderer");
+            _shipRenderer = go.AddComponent<ShipRenderer>();
+            _shipRenderer.Initialize(_harborManager, _city);
+            Log("Created ShipRenderer (modular ship visuals)");
         }
 
         // =================================================================
@@ -408,6 +441,7 @@ namespace PopVuj.Core
             LogDivider();
 
             _match.StartMatch();
+            _harborManager?.SpawnDemoShips();
             Log("First civilization started — shape them.");
         }
 
@@ -422,6 +456,7 @@ namespace PopVuj.Core
             }
 
             _match.StartMatch();
+            _harborManager?.SpawnDemoShips();
             _playerProgram?.ResetExecution();
             Log("New civilization started");
         }
