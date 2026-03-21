@@ -91,6 +91,13 @@ namespace PopVuj.Game
         public System.Action<float> OnFaithChanged;
         public System.Action OnBoardChanged;
 
+        // ── VFX events (fired by god powers for visual feedback) ────
+
+        public System.Action OnProphetSent;
+        public System.Action OnSmiteTriggered;
+        public System.Action<int> OnBearsSummoned;
+        public System.Action OnOmenSent;
+
         // ── Tick timing ─────────────────────────────────────────
 
         private float _tickAccumulator;
@@ -241,6 +248,7 @@ namespace PopVuj.Game
             Faith = Mathf.Clamp01(Faith + 0.08f);
             Heretics = Mathf.Max(0, Heretics - 2);
             OnFaithChanged?.Invoke(Faith);
+            OnProphetSent?.Invoke();
             return 1;
         }
 
@@ -253,6 +261,7 @@ namespace PopVuj.Game
             Deaths++;
             Faith = Mathf.Clamp01(Faith + 0.03f); // fear boost
             OnPopulationChanged?.Invoke(Population);
+            OnSmiteTriggered?.Invoke();
             return 1;
         }
 
@@ -276,6 +285,7 @@ namespace PopVuj.Game
             Deaths += kills;
             Faith = Mathf.Clamp01(Faith + 0.12f);
             OnPopulationChanged?.Invoke(Population);
+            OnBearsSummoned?.Invoke(kills);
             return kills;
         }
 
@@ -285,6 +295,7 @@ namespace PopVuj.Game
             if (!MatchInProgress || GameOver) return 0;
             Faith = Mathf.Clamp01(Faith + 0.15f);
             OnFaithChanged?.Invoke(Faith);
+            OnOmenSent?.Invoke();
             return 1;
         }
 
@@ -417,20 +428,20 @@ namespace PopVuj.Game
         }
 
         /// <summary>
-        /// Set a deck module on a docked ship. Costs 1 wood.
-        /// packed = ship_id*100 + tile*10 + module. Returns 1=success.
+        /// Set a module on a docked ship. Costs 1 wood.
+        /// moduleType maps to ShipModule enum (0-16). Returns 1=success.
         /// </summary>
         public int SetShipModule(int shipId, int tileIndex, int moduleType)
         {
             if (!MatchInProgress || GameOver) return 0;
             if (_harbor == null) return 0;
-            if (moduleType < 0 || moduleType > 9) return 0;
-            return _harbor.SetShipModule(shipId, tileIndex, (DeckModule)moduleType) ? 1 : 0;
+            if (moduleType < 0 || moduleType > 16) return 0;
+            return _harbor.SetShipModule(shipId, tileIndex, (ShipModule)moduleType) ? 1 : 0;
         }
 
         /// <summary>
-        /// Query what module is at a given tile on a ship.
-        /// Returns the DeckModule enum value (0-9), or -1 if invalid.
+        /// Query what module is at a given linear index on a ship.
+        /// Returns the ShipModule enum value, or -1 if invalid.
         /// </summary>
         public int GetShipModule(int shipId, int tileIndex)
         {

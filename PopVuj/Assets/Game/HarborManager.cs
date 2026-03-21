@@ -547,33 +547,38 @@ namespace PopVuj.Game
         // ═══════════════════════════════════════════════════════════════
 
         /// <summary>
-        /// Set/swap a deck module on a docked ship at a specific tile index.
+        /// Set/swap a module on a docked ship at a grid position (col, row).
         /// Ship must be Idle or Launched (not at sea or loading).
         /// Costs 1 wood per swap. Returns true on success.
         /// </summary>
-        public bool SetShipModule(int shipId, int tileIndex, DeckModule module)
+        public bool SetShipModule(int shipId, int col, int row, ShipModule module)
         {
             var ship = FindShipById(shipId);
             if (ship == null) return false;
             if (ship.State != ShipState.Idle && ship.State != ShipState.Launched)
                 return false;
 
+            if (ship.Grid == null) return false;
+            if (col < 0 || col >= ship.Grid.GetLength(0)) return false;
+            if (row < 0 || row >= ship.Grid.GetLength(1)) return false;
+
             // Can't swap if crew currently onboard exceeds new capacity
-            var testModules = (DeckModule[])ship.Modules.Clone();
-            if (tileIndex < 0 || tileIndex >= testModules.Length)
-                return false;
-            testModules[tileIndex] = module;
+            var testGrid = (ShipModule[,])ship.Grid.Clone();
+            testGrid[col, row] = module;
 
             int newCrew = 0;
-            for (int i = 0; i < testModules.Length; i++)
-                newCrew += Ship.GetModuleCrewSlots(testModules[i]);
+            int cols = testGrid.GetLength(0);
+            int rows = testGrid.GetLength(1);
+            for (int c = 0; c < cols; c++)
+                for (int r = 0; r < rows; r++)
+                    newCrew += Ship.GetModuleCrewSlots(testGrid[c, r]);
             newCrew = Mathf.Max(1, newCrew);
             if (ship.CrewCount > newCrew)
                 return false;
 
             if (!_city.SpendWood(1)) return false;
 
-            if (!ship.SetModule(tileIndex, module))
+            if (!ship.SetModule(col, row, module))
             {
                 _city.AddWood(1);
                 return false;
@@ -581,6 +586,15 @@ namespace PopVuj.Game
 
             OnShipsChanged?.Invoke();
             return true;
+        }
+
+        /// <summary>Backward-compatible: set module by linear index (col + row * Width).</summary>
+        public bool SetShipModule(int shipId, int linearIndex, ShipModule module)
+        {
+            var ship = FindShipById(shipId);
+            if (ship == null || ship.Grid == null) return false;
+            int w = ship.Grid.GetLength(0);
+            return SetShipModule(shipId, linearIndex % w, linearIndex / w, module);
         }
 
         /// <summary>Get a ship by ID. Returns null if not found.</summary>

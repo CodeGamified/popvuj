@@ -262,10 +262,21 @@ namespace PopVuj.Game
             if (rend != null)
             {
                 var mat = rend.material;
+                Color bodyColor = new Color(deepColor.r, deepColor.g, deepColor.b, 0.10f);
                 if (mat.HasProperty("_BaseColor"))
-                    mat.SetColor("_BaseColor", deepColor);
+                    mat.SetColor("_BaseColor", bodyColor);
                 else
-                    mat.color = deepColor;
+                    mat.color = bodyColor;
+
+                // Configure transparent rendering
+                if (mat.HasProperty("_Surface"))
+                    mat.SetFloat("_Surface", 1f);
+                mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                mat.SetFloat("_ZWrite", 0f);
+                mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+                mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
+                mat.SetOverrideTag("RenderType", "Transparent");
             }
         }
 

@@ -1,9 +1,11 @@
 // Copyright CodeGamified 2025-2026
 // MIT License — PopVuj
+using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
 using UnityEngine.Rendering.Universal;
+using CodeGamified.Audio;
 using CodeGamified.Camera;
 using CodeGamified.Time;
 using CodeGamified.Settings;
@@ -75,12 +77,26 @@ namespace PopVuj.Core
         private StructureRenderer _structureRenderer;
         private HarborManager _harborManager;
         private ShipRenderer _shipRenderer;
+        private WeatherRenderer _weatherRenderer;
+        private DayNightRenderer _dayNightRenderer;
+        private SkyRenderer _skyRenderer;
+        private GodPowerVFX _godPowerVFX;
+        private WildlifeManager _wildlifeManager;
         private PopVujProgram _playerProgram;
         private PopVujFateController _fateController;
         private PopVujTUIManager _tuiManager;
 
+        // Audio
+        private PopVujAudioProvider _audioProvider;
+        private AudioBridge.EditorHandlers _editorAudio;
+        private AudioBridge.EngineHandlers _engineAudio;
+        private AudioBridge.TimeHandlers _timeAudio;
+        private AudioBridge.PersistenceHandlers _persistAudio;
+        private PopVujAmbientSFX _ambientSFX;
+        private PopVujGameSFX _gameSFX;
+
         // Camera
-        private CameraAmbientMotion _cameraSway;
+        private CameraRig _cameraRig;
 
         // Post-processing
         private Bloom _bloom;
@@ -150,6 +166,21 @@ namespace PopVuj.Core
             // 6c. Ship renderer (needs harbor manager + city)
             CreateShipRenderer();
 
+            // 6d. Weather renderer (needs match + city)
+            CreateWeatherRenderer();
+
+            // 6d½. Sky renderer (properties-driven multi-layer sky)
+            CreateSkyRenderer();
+
+            // 6d¾. Day-night renderer (sun/moon arcs)
+            CreateDayNightRenderer();
+
+            // 6e. God power VFX (needs match + city + weather)
+            CreateGodPowerVFX();
+
+            // 6f. Wildlife (needs city + match)
+            CreateWildlifeManager();
+
             // 7. Input provider
             CreateInputProvider();
 
@@ -161,6 +192,15 @@ namespace PopVuj.Core
 
             // 8c. TUI manager (left god + right fate + bottom status)
             CreateTUIManager();
+
+            // 8d. Audio provider + bridge handlers
+            CreateAudioProvider();
+
+            // 8e. Ambient SFX (needs city + match + camera)
+            CreateAmbientSFX();
+
+            // 8f. Game-event SFX (needs match + harbor)
+            CreateGameSFX();
 
             // 9. Wire events + start
             WireEvents();
@@ -205,9 +245,20 @@ namespace PopVuj.Core
             cam.nearClipPlane = 0.1f;
             cam.farClipPlane = 200f;
 
-            // Ambient sway — god's lazy drift
-            _cameraSway = cam.gameObject.AddComponent<CameraAmbientMotion>();
-            _cameraSway.lookAtTarget = center;
+            // WASD camera rig — Free mode, side-view XY strip
+            _cameraRig = cam.gameObject.AddComponent<CameraRig>();
+            _cameraRig.enableWASDPan = true;
+            _cameraRig.enableMiddleMousePan = true;
+            _cameraRig.enableKeyboardRotate = false;    // Q/E reserved for zoom by InputProvider
+            _cameraRig.panSpeed = 12f;
+            _cameraRig.clampLookTargetY = false;         // allow vertical exploration (heavens/sewers)
+            _cameraRig.verticalPanMode = true;              // W/S = Y (up/down), A/D = X (left/right)
+            _cameraRig.minPitch = 5f;
+            _cameraRig.maxPitch = 60f;
+            _cameraRig.minZoomDistance = 4f;
+            _cameraRig.maxZoomDistance = 60f;
+            _cameraRig.zoomSpeed = 8f;
+            _cameraRig.freeSmoothness = 0.88f;
 
             // Post-processing: bloom for divine glow
             var camData = cam.GetComponent<UniversalAdditionalCameraData>();
@@ -233,7 +284,7 @@ namespace PopVuj.Core
             _bloom.highQualityFiltering.value = true;
             _postProcessVolume.profile = profile;
 
-            Log("Camera: side-view, XY plane, heavens above, sewers below");
+            Log("Camera: CameraRig (WASD/scroll) + ambient sway, side-view XY");
         }
 
         // =================================================================
@@ -333,6 +384,66 @@ namespace PopVuj.Core
         }
 
         // =================================================================
+        // WEATHER RENDERER
+        // =================================================================
+
+        private void CreateWeatherRenderer()
+        {
+            var go = new GameObject("WeatherRenderer");
+            _weatherRenderer = go.AddComponent<WeatherRenderer>();
+            _weatherRenderer.Initialize(_match, _city);
+            Log("Created WeatherRenderer (rain, snow, storm, drought particles)");
+        }
+
+        // =================================================================
+        // SKY RENDERER
+        // =================================================================
+
+        private void CreateSkyRenderer()
+        {
+            var go = new GameObject("SkyRenderer");
+            _skyRenderer = go.AddComponent<SkyRenderer>();
+            _skyRenderer.Initialize(_match, _city);
+            Log("Created SkyRenderer (properties-driven multi-layer sky)");
+        }
+
+        // =================================================================
+        // DAY-NIGHT RENDERER
+        // =================================================================
+
+        private void CreateDayNightRenderer()
+        {
+            var go = new GameObject("DayNightRenderer");
+            _dayNightRenderer = go.AddComponent<DayNightRenderer>();
+            _dayNightRenderer.Initialize(_city);
+            Log("Created DayNightRenderer (sun arc + moon phases + sky tint)");
+        }
+
+        // =================================================================
+        // GOD POWER VFX
+        // =================================================================
+
+        private void CreateGodPowerVFX()
+        {
+            var go = new GameObject("GodPowerVFX");
+            _godPowerVFX = go.AddComponent<GodPowerVFX>();
+            _godPowerVFX.Initialize(_match, _city, _weatherRenderer);
+            Log("Created GodPowerVFX (smite, prophet, omen, bears)");
+        }
+
+        // =================================================================
+        // WILDLIFE
+        // =================================================================
+
+        private void CreateWildlifeManager()
+        {
+            var go = new GameObject("WildlifeManager");
+            _wildlifeManager = go.AddComponent<WildlifeManager>();
+            _wildlifeManager.Initialize(_city, _match);
+            Log("Created WildlifeManager (birds, rats, bats, toads)");
+        }
+
+        // =================================================================
         // INPUT PROVIDER
         // =================================================================
 
@@ -380,11 +491,53 @@ namespace PopVuj.Core
         }
 
         // =================================================================
+        // AUDIO
+        // =================================================================
+
+        private void CreateAudioProvider()
+        {
+            _audioProvider = new PopVujAudioProvider();
+            Func<float> ts = () => SimulationTime.Instance?.timeScale ?? 1f;
+            _editorAudio  = AudioBridge.ForEditor(_audioProvider, ts);
+            _engineAudio  = AudioBridge.ForEngine(_audioProvider, ts);
+            _timeAudio    = AudioBridge.ForTime(_audioProvider, ts);
+            _persistAudio = AudioBridge.ForPersistence(_audioProvider, ts);
+            Log("Created PopVujAudioProvider + bridge handlers");
+        }
+
+        // =================================================================
+        // AMBIENT SFX
+        // =================================================================
+
+        private void CreateAmbientSFX()
+        {
+            var go = new GameObject("AmbientSFX");
+            _ambientSFX = go.AddComponent<PopVujAmbientSFX>();
+            _ambientSFX.Initialize(_city, _match);
+            Log("Created AmbientSFX (zone-based loops + weather overlay + wildlife stingers)");
+        }
+
+        // =================================================================
+        // GAME-EVENT SFX
+        // =================================================================
+
+        private void CreateGameSFX()
+        {
+            var go = new GameObject("GameSFX");
+            _gameSFX = go.AddComponent<PopVujGameSFX>();
+            _gameSFX.Initialize();
+            Log("Created GameSFX (death, smite, trade, construction)");
+        }
+
+        // =================================================================
         // EVENT WIRING
         // =================================================================
 
         private void WireEvents()
         {
+            // Track previous population for death detection
+            int prevPop = startingPopulation;
+
             if (SimulationTime.Instance != null)
             {
                 SimulationTime.Instance.OnTimeScaleChanged += s => Log($"Time scale -> {s:F0}x");
@@ -397,11 +550,14 @@ namespace PopVuj.Core
                 {
                     Log("CIVILIZATION FOUNDED");
                     _renderer?.MarkDirty();
+                    prevPop = startingPopulation;
                 };
 
                 _match.OnPopulationChanged += pop =>
                 {
                     _renderer?.MarkDirty();
+                    _gameSFX?.OnPopulationChanged(pop, prevPop);
+                    prevPop = pop;
                 };
 
                 _match.OnFaithChanged += faith =>
@@ -416,7 +572,21 @@ namespace PopVuj.Core
                         StartCoroutine(RestartAfterDelay());
                 };
 
-                _match.OnBoardChanged += () => _renderer?.MarkDirty();
+                _match.OnBoardChanged += () =>
+                {
+                    _renderer?.MarkDirty();
+                    _gameSFX?.OnBoardChanged();
+                };
+
+                // VFX events → game SFX
+                _match.OnSmiteTriggered   += () => _gameSFX?.OnSmite();
+                _match.OnBearsSummoned    += kills => _gameSFX?.OnBearsSummoned(kills);
+                _match.OnOmenSent         += () => _gameSFX?.OnOmen();
+            }
+
+            if (_harborManager != null)
+            {
+                _harborManager.OnShipReturned += ship => _gameSFX?.OnShipReturned(ship);
             }
         }
 

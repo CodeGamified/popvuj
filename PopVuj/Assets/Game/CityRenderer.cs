@@ -24,7 +24,6 @@ namespace PopVuj.Game
 
         // Per-slot road blocks
         private GameObject[] _roadObjects;
-        private GameObject _groundLine;
 
         // Dynamic containers (destroyed & recreated on change)
         private GameObject _buildingParent;
@@ -50,7 +49,6 @@ namespace PopVuj.Game
         private static readonly Color ShipyardColor  = new Color(0.45f, 0.30f, 0.15f, 0.10f);
         private static readonly Color PierColor      = new Color(0.50f, 0.35f, 0.18f, 0.10f);
         private static readonly Color WarehouseColor = new Color(0.35f, 0.30f, 0.40f, 0.10f);
-        private static readonly Color GroundColor    = new Color(0.10f, 0.08f, 0.05f);
 
         // Sewer archetype colors — one per SewerType
         private static readonly Color DrainColor     = new Color(0.14f, 0.12f, 0.08f, 0.10f);  // thin pipe grey-brown
@@ -61,6 +59,7 @@ namespace PopVuj.Game
         private static readonly Color BazaarColor    = new Color(0.28f, 0.15f, 0.08f, 0.10f);  // smuggler amber
         private static readonly Color DrydockColor   = new Color(0.20f, 0.25f, 0.35f, 0.10f);  // flooded blue-grey
         private static readonly Color VaultColor     = new Color(0.25f, 0.20f, 0.30f, 0.10f);  // dark purple vault
+        private static readonly Color CanalColor     = new Color(0.16f, 0.14f, 0.12f, 0.10f);  // dim passage grey
 
         // Water surface (Gerstner wave simulation)
         private WaterSurface _waterSurface;
@@ -68,6 +67,10 @@ namespace PopVuj.Game
         // Tree colors
         private static readonly Color TrunkColor     = new Color(0.35f, 0.22f, 0.10f);
         private static readonly Color CanopyColor    = new Color(0.08f, 0.30f, 0.08f);
+        private static readonly Color PineColor      = new Color(0.06f, 0.25f, 0.12f);
+        private static readonly Color CypressColor   = new Color(0.04f, 0.22f, 0.06f);
+        private static readonly Color PalmColor      = new Color(0.15f, 0.38f, 0.10f);
+        private static readonly Color PalmTrunkColor = new Color(0.40f, 0.32f, 0.18f);
 
         // ── Building heights ────────────────────────────────────
 
@@ -103,8 +106,6 @@ namespace PopVuj.Game
             _treeParent.transform.SetParent(transform, false);
             _waterParent = new GameObject("Water");
             _waterParent.transform.SetParent(transform, false);
-
-            BuildGroundLine();
 
             _city.OnGridChanged += () => _dirty = true;
             QualityBridge.Register(this);
@@ -194,51 +195,244 @@ namespace PopVuj.Game
 
             for (int i = 0; i < _city.Width; i++)
             {
+                var surfType = _city.GetSurface(i);
                 int owner = _city.GetOwner(i);
-                if (owner != i) continue;
 
-                var type = _city.GetSurface(i);
-                if (type == CellType.Empty || type == CellType.Tree) continue;
+                // Multi-tile buildings: only render at owner origin
+                if (owner >= 0 && owner != i) continue;
+
+                // Canal sewers beneath empty/tree (unowned slots)
+                if ((surfType == CellType.Empty || surfType == CellType.Tree) && owner < 0)
+                {
+                    float depth = _city.GetSewerDepth(i);
+                    if (depth <= 0.01f) continue;
+
+                    float x = i * CellSize + CellSize * 0.5f;
+                    var go = CreatePrimitive($"Sewer_Canal_{i}", _sewerParent.transform);
+                    go.transform.localPosition = new Vector3(x, -depth * 0.5f, 0f);
+                    go.transform.localScale = new Vector3(CellSize * 0.88f, depth, CellSize * 0.85f);
+                    SetColor(go, CanalColor);
+                    continue;
+                }
+
+                // Buildings: render sewer at owner origin
+                if (surfType == CellType.Empty || surfType == CellType.Tree) continue;
 
                 int bw = _city.GetBuildingWidth(i);
                 if (bw < 1) bw = 1;
 
-                float depth = _city.GetSewerDepth(i);
-                if (depth <= 0.01f) continue; // no sewer (e.g. farm)
+                float bldgDepth = _city.GetSewerDepth(i);
+                if (bldgDepth <= 0.01f) continue;
 
                 var sewType = _city.GetSewerAt(i);
                 Color sewColor = GetSewerColor(sewType);
 
                 float totalW = bw * CellSize;
-                float x = i * CellSize + totalW * 0.5f;
+                float bx = i * CellSize + totalW * 0.5f;
 
-                var go = CreatePrimitive($"Sewer_{sewType}_{i}", _sewerParent.transform);
-                go.transform.localPosition = new Vector3(x, -depth * 0.5f, BuildingZ);
-                go.transform.localScale = new Vector3(totalW * 0.88f, depth, CellSize * 0.85f);
-                SetColor(go, sewColor);
+                var sgo = CreatePrimitive($"Sewer_{sewType}_{i}", _sewerParent.transform);
+                sgo.transform.localPosition = new Vector3(bx, -bldgDepth * 0.5f, 0f);
+                sgo.transform.localScale = new Vector3(totalW * 0.88f, bldgDepth, CellSize * 0.85f);
+                SetColor(sgo, sewColor);
             }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // TREE FOLIAGE — species assigned by proximity to buildings
+        //   Oak:     near farms / default — parent_leaves canopy
+        //   Pine:    hash-selected 25% — underbranch layers + top
+        //   Cypress: near chapel — columnar pillar + tip
+        //   Palm:    near harbor — tall trunk + fronds
+        // ═══════════════════════════════════════════════════════════════
+
+        private enum TreeSpecies { Oak, Pine, Cypress, Palm }
+
+        private static readonly string[] OakCanopyMeshes = { "parent_leaves", "parent_leaves_fruit" };
+        private static readonly string[] OakCanopyTextures = {
+            "9_organic/2_leaves/dark_deciduous_leaves_1",
+            "9_organic/2_leaves/dark_deciduous_leaves_2",
+            "9_organic/2_leaves/beech_tree_leaves_1",
+            "9_organic/2_leaves/beech_tree_leaves_2",
+        };
+        private static readonly string[] PineUnderbranches = {
+            "pine/underbranch", "pine/underbranch_2", "pine/underbranch_3", "pine/underbranch_4"
+        };
+        private static readonly string[] PineTops = { "pine/top_flat", "pine/top_short", "pine/top_tall" };
+        private const string PineNeedleTex = "9_organic/2_leaves/pine/underbranch_upwards";
+        private const string PineTopTex    = "9_organic/2_leaves/pine/top";
+        private static readonly string[] CypressPillars = {
+            "cypress/cypress_leaves_pillar_1", "cypress/cypress_leaves_pillar_2",
+            "cypress/cypress_leaves_pillar_3", "cypress/cypress_leaves_pillar_4"
+        };
+        private static readonly string[] CypressPillarTextures = {
+            "9_organic/2_leaves/cypress/cypress_leaves_pillar_1",
+            "9_organic/2_leaves/cypress/cypress_leaves_pillar_2",
+            "9_organic/2_leaves/cypress/cypress_leaves_pillar_3",
+            "9_organic/2_leaves/cypress/cypress_leaves_pillar_4",
+        };
+        private const string CypressTipTex = "9_organic/2_leaves/cypress/cypress_leaves_top_1";
+        private static readonly string[] PalmFronds = {
+            "caribbean_royal_palm_straight_1", "caribbean_royal_palm_straight_2",
+            "caribbean_royal_palm_old_straight_1", "caribbean_royal_palm_old_straight_2"
+        };
+        private static readonly string[] PalmFrondTextures = {
+            "9_organic/2_leaves/caribbean_royal_palm_leaves_young",
+            "9_organic/2_leaves/caribbean_royal_palm_leaves_old",
+        };
+        private const string OakTrunkTex   = "9_organic/1_wood/oak_log_branches";
+        private const string PineTrunkTex  = "9_organic/1_wood/pine_log_branches";
+        private const string PalmTrunkTex  = "9_organic/1_wood/palm_tree_trunk";
+
+        private static int TreeHash(int slot, int salt = 0)
+        {
+            return (int)(((uint)slot * 2654435761u + (uint)salt * 1103515245u) & 0x7FFFFFFFu);
+        }
+
+        private TreeSpecies PickTreeSpecies(int slot)
+        {
+            for (int d = -3; d <= 3; d++)
+            {
+                int n = slot + d;
+                if (n < 0 || n >= _city.Width) continue;
+                var bt = _city.GetBuildingAt(n);
+                if (bt == CellType.Pier || bt == CellType.Shipyard)
+                    return TreeSpecies.Palm;
+                if (bt == CellType.Chapel)
+                    return TreeSpecies.Cypress;
+            }
+            return TreeHash(slot, 0) % 4 == 0 ? TreeSpecies.Pine : TreeSpecies.Oak;
         }
 
         private void RenderTrees()
         {
             ClearChildren(_treeParent);
+            var tp = _treeParent.transform;
 
             for (int i = 0; i < _city.Width; i++)
             {
                 if (_city.GetSurface(i) != CellType.Tree) continue;
 
                 float x = i * CellSize + CellSize * 0.5f;
+                float z = BuildingZ * 0.5f;
 
-                var trunk = CreatePrimitive($"Trunk_{i}", _treeParent.transform);
-                trunk.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH * 0.5f, BuildingZ * 0.5f);
-                trunk.transform.localScale = new Vector3(TreeTrunkW, TreeTrunkH, TreeTrunkW);
-                SetColor(trunk, TrunkColor);
-
-                var canopy = CreatePrimitive($"Canopy_{i}", _treeParent.transform);
-                canopy.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH + TreeCanopyH * 0.5f, BuildingZ * 0.5f);
-                canopy.transform.localScale = new Vector3(TreeCanopyW, TreeCanopyH, TreeCanopyW);
-                SetColor(canopy, CanopyColor);
+                bool ok;
+                switch (PickTreeSpecies(i))
+                {
+                    case TreeSpecies.Cypress: ok = RenderCypressTree(i, x, z, tp); break;
+                    case TreeSpecies.Pine:    ok = RenderPineTree(i, x, z, tp);    break;
+                    case TreeSpecies.Palm:    ok = RenderPalmTree(i, x, z, tp);    break;
+                    default:                  ok = RenderOakTree(i, x, z, tp);     break;
+                }
+                if (!ok) RenderFallbackTree(i, x, z, tp);
             }
+        }
+
+        private bool RenderOakTree(int i, float x, float z, Transform parent)
+        {
+            string mesh = OakCanopyMeshes[TreeHash(i, 1) % OakCanopyMeshes.Length];
+            var canopy = ObjectScale.CreateMeshObject($"OakCanopy_{i}", mesh, parent);
+            if (canopy == null) return false;
+
+            var trunk = CreatePrimitive($"Trunk_{i}", parent);
+            trunk.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH * 0.5f, z);
+            trunk.transform.localScale = new Vector3(TreeTrunkW, TreeTrunkH, TreeTrunkW);
+            SetTexturedOpaque(trunk, OakTrunkTex, Color.white);
+
+            float yRot = TreeHash(i, 10) % 360;
+            canopy.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH + 0.28f, z);
+            canopy.transform.localScale = new Vector3(0.28f, 0.28f, 0.28f);
+            canopy.transform.localRotation = Quaternion.Euler(0f, yRot, 0f);
+            string leafTex = OakCanopyTextures[TreeHash(i, 11) % OakCanopyTextures.Length];
+            SetTexturedCutout(canopy, leafTex, Color.white);
+            return true;
+        }
+
+        private bool RenderPineTree(int i, float x, float z, Transform parent)
+        {
+            string branchMesh = PineUnderbranches[TreeHash(i, 2) % PineUnderbranches.Length];
+            var branches = ObjectScale.CreateMeshObject($"PineBranch_{i}", branchMesh, parent);
+            if (branches == null) return false;
+
+            var trunk = CreatePrimitive($"Trunk_{i}", parent);
+            trunk.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH * 0.6f, z);
+            trunk.transform.localScale = new Vector3(TreeTrunkW * 0.8f, TreeTrunkH * 1.2f, TreeTrunkW * 0.8f);
+            SetTexturedOpaque(trunk, PineTrunkTex, Color.white);
+
+            float yRot = TreeHash(i, 10) % 360;
+            branches.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH + 0.20f, z);
+            branches.transform.localScale = new Vector3(0.25f, 0.22f, 0.25f);
+            branches.transform.localRotation = Quaternion.Euler(0f, yRot, 0f);
+            SetTexturedCutout(branches, PineNeedleTex, Color.white);
+
+            string topMesh = PineTops[TreeHash(i, 3) % PineTops.Length];
+            var top = ObjectScale.CreateMeshObject($"PineTop_{i}", topMesh, parent);
+            if (top != null)
+            {
+                top.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH + 0.55f, z);
+                top.transform.localScale = new Vector3(0.20f, 0.20f, 0.20f);
+                top.transform.localRotation = Quaternion.Euler(0f, yRot, 0f);
+                SetTexturedCutout(top, PineTopTex, Color.white);
+            }
+            return true;
+        }
+
+        private bool RenderCypressTree(int i, float x, float z, Transform parent)
+        {
+            int pillarIdx = TreeHash(i, 4) % CypressPillars.Length;
+            string pillarMesh = CypressPillars[pillarIdx];
+            var pillar = ObjectScale.CreateMeshObject($"CypressPillar_{i}", pillarMesh, parent);
+            if (pillar == null) return false;
+
+            float yRot = TreeHash(i, 10) % 360;
+            pillar.transform.localPosition = new Vector3(x, RoadH + 0.35f, z);
+            pillar.transform.localScale = new Vector3(0.18f, 0.30f, 0.18f);
+            pillar.transform.localRotation = Quaternion.Euler(0f, yRot, 0f);
+            string pillarTex = CypressPillarTextures[pillarIdx % CypressPillarTextures.Length];
+            SetTexturedCutout(pillar, pillarTex, Color.white);
+
+            var tip = ObjectScale.CreateMeshObject($"CypressTip_{i}", "cypress/cypress_leaves_tip", parent);
+            if (tip != null)
+            {
+                tip.transform.localPosition = new Vector3(x, RoadH + 0.80f, z);
+                tip.transform.localScale = new Vector3(0.14f, 0.18f, 0.14f);
+                tip.transform.localRotation = Quaternion.Euler(0f, yRot, 0f);
+                SetTexturedCutout(tip, CypressTipTex, Color.white);
+            }
+            return true;
+        }
+
+        private bool RenderPalmTree(int i, float x, float z, Transform parent)
+        {
+            string frondMesh = PalmFronds[TreeHash(i, 5) % PalmFronds.Length];
+            var fronds = ObjectScale.CreateMeshObject($"PalmFronds_{i}", frondMesh, parent);
+            if (fronds == null) return false;
+
+            var trunk = CreatePrimitive($"Trunk_{i}", parent);
+            trunk.transform.localPosition = new Vector3(x, RoadH + 0.40f, z);
+            trunk.transform.localScale = new Vector3(TreeTrunkW * 0.6f, 0.80f, TreeTrunkW * 0.6f);
+            SetTexturedOpaque(trunk, PalmTrunkTex, Color.white);
+
+            float yRot = TreeHash(i, 10) % 360;
+            fronds.transform.localPosition = new Vector3(x, RoadH + 0.85f, z);
+            fronds.transform.localScale = new Vector3(0.22f, 0.22f, 0.22f);
+            fronds.transform.localRotation = Quaternion.Euler(0f, yRot, 0f);
+            string frondTex = PalmFrondTextures[TreeHash(i, 12) % PalmFrondTextures.Length];
+            SetTexturedCutout(fronds, frondTex, Color.white);
+            return true;
+        }
+
+        /// <summary>Original primitive tree — fallback when meshes aren't available.</summary>
+        private void RenderFallbackTree(int i, float x, float z, Transform parent)
+        {
+            var trunk = CreatePrimitive($"Trunk_{i}", parent);
+            trunk.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH * 0.5f, z);
+            trunk.transform.localScale = new Vector3(TreeTrunkW, TreeTrunkH, TreeTrunkW);
+            SetColor(trunk, TrunkColor);
+
+            var canopy = CreatePrimitive($"Canopy_{i}", parent);
+            canopy.transform.localPosition = new Vector3(x, RoadH + TreeTrunkH + TreeCanopyH * 0.5f, z);
+            canopy.transform.localScale = new Vector3(TreeCanopyW, TreeCanopyH, TreeCanopyW);
+            SetColor(canopy, CanopyColor);
         }
 
         /// <summary>
@@ -320,6 +514,7 @@ namespace PopVuj.Game
                 case SewerType.Bazaar:  return BazaarColor;
                 case SewerType.Drydock: return DrydockColor;
                 case SewerType.Vault:   return VaultColor;
+                case SewerType.Canal:   return CanalColor;
                 default:                return DrainColor;
             }
         }
@@ -327,20 +522,6 @@ namespace PopVuj.Game
         // ═══════════════════════════════════════════════════════════════
         // HELPERS
         // ═══════════════════════════════════════════════════════════════
-
-        private void BuildGroundLine()
-        {
-            _groundLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            _groundLine.name = "GroundLine";
-            _groundLine.transform.SetParent(transform, false);
-            float cityW = _city.Width * CellSize;
-            float lineHeight = CellSize * 0.08f;
-            _groundLine.transform.localPosition = new Vector3(cityW * 0.5f, 0f, 0f);
-            _groundLine.transform.localScale = new Vector3(cityW, lineHeight, CellSize);
-            var col = _groundLine.GetComponent<Collider>();
-            if (col != null) Destroy(col);
-            SetColor(_groundLine, GroundColor);
-        }
 
         private GameObject CreateCell(string name)
         {
@@ -394,6 +575,83 @@ namespace PopVuj.Game
                 mat.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");
                 mat.SetOverrideTag("RenderType", "Transparent");
             }
+        }
+
+        /// <summary>
+        /// Apply a texture and set material properties on ALL materials of a renderer.
+        /// Handles multi-submesh .obj models that have multiple material slots.
+        /// </summary>
+        private static void ApplyTextureToAll(GameObject go, string texturePath, Color tint,
+            bool cutout)
+        {
+            var tex = ObjectScale.LoadTexture(texturePath);
+            var r = go.GetComponentInChildren<Renderer>();
+            if (r == null) return;
+
+            var mats = r.materials; // copy so we can mutate
+            for (int m = 0; m < mats.Length; m++)
+            {
+                var mat = mats[m];
+
+                // Texture
+                if (tex != null)
+                {
+                    if (mat.HasProperty("_BaseMap"))
+                        mat.SetTexture("_BaseMap", tex);
+                    else if (mat.HasProperty("_MainTex"))
+                        mat.SetTexture("_MainTex", tex);
+                }
+
+                // Tint
+                if (mat.HasProperty("_BaseColor"))
+                    mat.SetColor("_BaseColor", tint);
+                else
+                    mat.color = tint;
+
+                // Depth & blend — always opaque pipeline with depth writes
+                if (mat.HasProperty("_Surface"))
+                    mat.SetFloat("_Surface", 0f);  // Opaque
+                mat.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
+                mat.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.Zero);
+                mat.SetFloat("_ZWrite", 1f);
+                mat.DisableKeyword("_SURFACE_TYPE_TRANSPARENT");
+
+                if (cutout)
+                {
+                    if (mat.HasProperty("_AlphaClip"))
+                        mat.SetFloat("_AlphaClip", 1f);
+                    if (mat.HasProperty("_Cutoff"))
+                        mat.SetFloat("_Cutoff", 0.3f);
+                    mat.EnableKeyword("_ALPHATEST_ON");
+                    mat.SetOverrideTag("RenderType", "TransparentCutout");
+                    mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.AlphaTest;
+                    if (mat.HasProperty("_Cull"))
+                        mat.SetFloat("_Cull", 0f); // Double-sided
+                }
+                else
+                {
+                    mat.DisableKeyword("_ALPHATEST_ON");
+                    mat.SetOverrideTag("RenderType", "Opaque");
+                    mat.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Geometry;
+                }
+            }
+            r.materials = mats; // write back
+        }
+
+        /// <summary>
+        /// Opaque textured material — for trunks, bark, solid surfaces.
+        /// </summary>
+        private static void SetTexturedOpaque(GameObject go, string texturePath, Color tint)
+        {
+            ApplyTextureToAll(go, texturePath, tint, cutout: false);
+        }
+
+        /// <summary>
+        /// Alpha-cutout textured material — for leaves, foliage, fronds.
+        /// </summary>
+        private static void SetTexturedCutout(GameObject go, string texturePath, Color tint)
+        {
+            ApplyTextureToAll(go, texturePath, tint, cutout: true);
         }
     }
 }

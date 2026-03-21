@@ -54,7 +54,7 @@ namespace PopVuj.Crew
 
         private const float LANE_DRIFT_SPEED = 0.4f;     // how fast minions shift between lanes (Z units/sec)
         private const float BRIDGE_LANE_DRIFT = 2.0f;    // faster drift on bridge for snappy turns
-        private const float PROXIMITY_THRESHOLD = 0.28f;  // travel-axis distance for overlap detection
+        private const float PROXIMITY_THRESHOLD = 0.50f;  // travel-axis distance for overlap detection
         private const float CART_SLOWDOWN = 0.6f;         // speed multiplier when stuck behind a cart
         private const float WAYPOINT_ARRIVE = 0.06f;      // close enough to a waypoint target
 

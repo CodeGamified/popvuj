@@ -54,56 +54,67 @@ namespace PopVuj.Game
     }
 
     /// <summary>
-    /// Deck module type — what is installed on each 1-unit-wide tile of the ship.
-    /// Analogous to PierFixture for pier tiles. Each tile-width position along
-    /// the ship deck can hold a different module, allowing customization:
+    /// Ship module type — what occupies each cell of a ship's 2D grid.
+    /// Ships are a 2D array of modules [Width × Height] where:
+    ///   - Columns run stern(0) to bow(Width-1)
+    ///   - Rows run hold(0) to superstructure(Height-1)
     ///
-    ///   A 3-wide Brigantine might be:
-    ///     [Cannon | Mast | Helm]     — warship config
-    ///     [CargoHatch | Crane | Helm] — trade hauler config
-    ///     [FishingRig | Mast | Helm]  — fishing vessel config
+    /// Structure emerges from the layout. "Forecastle" isn't a concept —
+    /// it's the result of enclosed modules stacking at the bow.
     ///
-    /// Modules affect derived stats: crew capacity, cargo capacity, speed, combat.
-    /// The Helm module is always required (placed at stern by default).
+    /// Example 5×4 Ship of the Line:
+    ///   Row 3: Wheel   | Air     | Sail     | Crane     | Air
+    ///   Row 2: Helm    | Lookout | SailBase | CraneBase | FigureHead
+    ///   Row 1: Cabin   | Cabin   | Kitchen  | Cannon    | Cabin
+    ///   Row 0: Air     | Store   | Store    | Store     | Magazine
+    ///
+    /// Cargo is below deck (Store modules). Cannons consume space that
+    /// could be storage — warfare comes with a visible trade cost.
     /// </summary>
-    public enum DeckModule
+    public enum ShipModule
     {
-        None         = 0,   // empty deck space — walkway only
-        Helm         = 1,   // captain's station — required, 1 per ship (adds 1 crew: captain)
-        Mast         = 2,   // sailing mast with canvas — propulsion (adds 2 crew: riggers)
-        Cannon       = 3,   // gun emplacement — combat power (adds 1 crew: gunner)
-        Crane        = 4,   // cargo loading crane — faster load/unload (adds 1 crew: operator)
-        Oars         = 5,   // rowing station — backup propulsion, no wind needed (adds 1 crew: rower)
-        CargoHatch   = 6,   // hold access hatch — extra cargo storage (+3 cargo capacity)
-        Cabin        = 7,   // crew quarters below deck — extra bunks (+2 crew capacity)
-        FishingRig   = 8,   // fishing station — passive food income on voyage (adds 1 crew: fisher)
-        Lookout      = 9,   // elevated crow's nest platform — detection range bonus (adds 1 crew: lookout)
+        Air          = 0,   // empty space — open sky above, open water below waterline
+        Helm         = 1,   // captain's station — required (adds 1 crew: captain)
+        Mast         = 2,   // mast trunk — propulsion (adds 2 crew: riggers)
+        Cannon       = 3,   // gun emplacement with port (adds 1 crew: gunner)
+        Crane        = 4,   // loading crane upper structure (adds 1 crew: operator)
+        Oars         = 5,   // rowing station (adds 1 crew: rower)
+        Store        = 6,   // cargo storage bay (+3 cargo capacity)
+        Cabin        = 7,   // crew quarters / bunks (+2 crew capacity)
+        FishingRig   = 8,   // fishing equipment (adds 1 crew: fisher)
+        Lookout      = 9,   // observation / crow's nest (adds 1 crew: lookout)
+        Kitchen      = 10,  // galley — cooking/eating
+        Magazine     = 11,  // powder magazine — ammo storage for cannons
+        FigureHead   = 12,  // bow decoration
+        CraneBase    = 13,  // crane foundation at deck level
+        SailBase     = 14,  // mast step at deck level
+        Wheel        = 15,  // steering wheel (elevated above helm)
+        Sail         = 16,  // sail canvas area (rigging)
     }
 
     /// <summary>
-    /// A ship — a modular "floating building" with crew slots, cargo hold,
-    /// and a state machine. Width determines hull class and all derived stats.
+    /// A ship — a 2D grid of modules forming a "floating building" with
+    /// crew slots, cargo hold, and a state machine.
     ///
-    /// Ships travel on the road surface (Z=0) and dock along the pier's X
-    /// extent. The pier must be long enough to accommodate all docked ships
-    /// (sum of ship widths ≤ pier length). Cranes service ships by spatial
-    /// overlap — any crane whose X range overlaps a ship can load/unload it.
+    /// The grid is [Width × Height]:
+    ///   - Columns: stern(0) to bow(Width-1)
+    ///   - Rows:    hold(0) to superstructure(Height-1)
+    ///   - Row 0 is below waterline for ships with Height >= 2
     ///
-    /// Like buildings, ships have slots: sailors man positions (helm, sails,
-    /// cannons, oars) the way worshippers fill chapel pews.
+    /// Structure emerges from the layout — no hardcoded forecastle,
+    /// quarterdeck, etc. Those appear when enclosed modules stack up.
     ///
-    /// Ship roles by slot index:
-    ///   Slot 0        = Captain (always — helm position)
-    ///   Slot 1..N     = Sailors (rigging, sails, oars)
-    ///   Last slots    = Gunners (if Brigantine+, man the cannons)
+    /// Cannon modules consume grid cells that could be Store modules,
+    /// so warfare comes with a visible trade cost.
     /// </summary>
     public class Ship
     {
         // ── Identity ────────────────────────────────────────────
         public int Id;
 
-        // ── Dimensions (tile-width, like buildings) ─────────────
-        public int Width;
+        // ── Dimensions ──────────────────────────────────────────
+        public int Width;                 // columns (stern-to-bow tile count)
+        public int Height => GetHeight(Width);
 
         // ── Classification ──────────────────────────────────────
         public HullClass Hull => ClassifyHull(Width);
@@ -123,21 +134,21 @@ namespace PopVuj.Game
         public float BuildProgress;       // 0→1, advances per shipwright-tick
         public int ShipyardOrigin;        // which shipyard built this (-1 after launch)
 
-        // ── Deck Modules (per-tile customization) ───────────────
+        // ── Module Grid (2D ship layout) ────────────────────────
         /// <summary>
-        /// One module per tile-width, indexed stern(0) to bow(Width-1).
-        /// Like PierFixture for pier tiles — each slot can hold a different module.
+        /// 2D module grid [col, row]. Col 0=stern, Col Width-1=bow.
+        /// Row 0=hold (below waterline), Row Height-1=superstructure.
         /// </summary>
-        public DeckModule[] Modules;
+        public ShipModule[,] Grid;
 
-        // ── Crew (now module-derived) ───────────────────────────
+        // ── Crew (module-derived) ───────────────────────────────
         public int CrewCount;             // minions currently aboard
-        public int CrewCapacity => GetModuleCrewCapacity();
-        public int GunnerSlots => CountModule(DeckModule.Cannon);
+        public int CrewCapacity => GetGridCrewCapacity();
+        public int GunnerSlots => CountModule(ShipModule.Cannon);
 
-        // ── Cargo hold (now module-derived) ─────────────────────
+        // ── Cargo hold (module-derived) ─────────────────────────
         public int CargoCount;            // cargo units currently loaded
-        public int CargoCapacity => GetModuleCargoCapacity();
+        public int CargoCapacity => GetGridCargoCapacity();
 
         /// <summary>What kind of cargo is in the hold (set by route or on spawn).</summary>
         public CargoKind HoldCargoKind;
@@ -171,146 +182,249 @@ namespace PopVuj.Game
             X = 0f;
             TargetCraneSlot = -1;
 
-            // Initialize default deck modules for this hull class
-            Modules = GetDefaultModules(Width);
+            // Initialize 2D module grid
+            Grid = GetDefaultGrid(Width);
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // DECK MODULE SYSTEM
+        // MODULE GRID SYSTEM
         // ═══════════════════════════════════════════════════════════════
 
-        /// <summary>Count how many tiles have a specific module installed.</summary>
-        public int CountModule(DeckModule module)
+        /// <summary>Count how many cells have a specific module installed.</summary>
+        public int CountModule(ShipModule module)
         {
+            if (Grid == null) return 0;
             int count = 0;
-            if (Modules == null) return 0;
-            for (int i = 0; i < Modules.Length; i++)
-                if (Modules[i] == module) count++;
+            int cols = Grid.GetLength(0);
+            int rows = Grid.GetLength(1);
+            for (int c = 0; c < cols; c++)
+                for (int r = 0; r < rows; r++)
+                    if (Grid[c, r] == module) count++;
             return count;
         }
 
-        /// <summary>Get the module at a specific tile index (0=stern, Width-1=bow).</summary>
-        public DeckModule GetModule(int tileIndex)
+        /// <summary>Get the module at a grid position.</summary>
+        public ShipModule GetModule(int col, int row)
         {
-            if (Modules == null || tileIndex < 0 || tileIndex >= Modules.Length)
-                return DeckModule.None;
-            return Modules[tileIndex];
+            if (Grid == null || col < 0 || row < 0
+                || col >= Grid.GetLength(0) || row >= Grid.GetLength(1))
+                return ShipModule.Air;
+            return Grid[col, row];
+        }
+
+        /// <summary>Get module by linear index (col + row * Width) for backward compat.</summary>
+        public ShipModule GetModule(int linearIndex)
+        {
+            if (Grid == null) return ShipModule.Air;
+            int cols = Grid.GetLength(0);
+            int col = linearIndex % cols;
+            int row = linearIndex / cols;
+            return GetModule(col, row);
         }
 
         /// <summary>
-        /// Set / swap the module at a tile index. Cannot remove the last Helm.
+        /// Set / swap the module at a grid position. Cannot remove the last Helm.
         /// Returns true on success.
         /// </summary>
-        public bool SetModule(int tileIndex, DeckModule module)
+        public bool SetModule(int col, int row, ShipModule module)
         {
-            if (Modules == null || tileIndex < 0 || tileIndex >= Modules.Length)
+            if (Grid == null || col < 0 || row < 0
+                || col >= Grid.GetLength(0) || row >= Grid.GetLength(1))
                 return false;
 
-            // Prevent removing the last Helm — every ship needs exactly one
-            if (Modules[tileIndex] == DeckModule.Helm && module != DeckModule.Helm)
+            // Prevent removing the last Helm
+            if (Grid[col, row] == ShipModule.Helm && module != ShipModule.Helm)
             {
-                if (CountModule(DeckModule.Helm) <= 1)
+                if (CountModule(ShipModule.Helm) <= 1)
                     return false;
             }
 
             // Prevent placing a second Helm
-            if (module == DeckModule.Helm && Modules[tileIndex] != DeckModule.Helm)
+            if (module == ShipModule.Helm && Grid[col, row] != ShipModule.Helm)
             {
-                if (CountModule(DeckModule.Helm) >= 1)
+                if (CountModule(ShipModule.Helm) >= 1)
                     return false;
             }
 
-            Modules[tileIndex] = module;
+            Grid[col, row] = module;
             return true;
+        }
+
+        /// <summary>Set module by linear index for backward compat.</summary>
+        public bool SetModule(int linearIndex, ShipModule module)
+        {
+            if (Grid == null) return false;
+            int cols = Grid.GetLength(0);
+            int col = linearIndex % cols;
+            int row = linearIndex / cols;
+            return SetModule(col, row, module);
         }
 
         /// <summary>Does this ship have at least one Mast or Oars for propulsion?</summary>
         public bool HasPropulsion =>
-            CountModule(DeckModule.Mast) > 0 || CountModule(DeckModule.Oars) > 0;
+            CountModule(ShipModule.Mast) > 0 || CountModule(ShipModule.Oars) > 0;
 
         /// <summary>Does this ship have a Crane module for self-loading?</summary>
-        public bool HasCrane => CountModule(DeckModule.Crane) > 0;
+        public bool HasCrane => CountModule(ShipModule.Crane) > 0;
 
         /// <summary>Does this ship have a Lookout module?</summary>
-        public bool HasLookout => CountModule(DeckModule.Lookout) > 0;
+        public bool HasLookout => CountModule(ShipModule.Lookout) > 0;
 
         /// <summary>Does this ship have a FishingRig?</summary>
-        public bool HasFishingRig => CountModule(DeckModule.FishingRig) > 0;
+        public bool HasFishingRig => CountModule(ShipModule.FishingRig) > 0;
 
         /// <summary>
-        /// Crew capacity derived from installed modules.
-        /// Each module type contributes a fixed number of crew stations:
-        ///   Helm=1(captain), Mast=2(riggers), Cannon=1(gunner),
-        ///   Crane=1(operator), Oars=1(rower), Cabin=2(extra bunks),
-        ///   FishingRig=1(fisher), Lookout=1(lookout), CargoHatch=0, None=0
+        /// Crew capacity derived from all modules in the 2D grid.
         /// </summary>
-        private int GetModuleCrewCapacity()
+        private int GetGridCrewCapacity()
         {
-            if (Modules == null) return GetBaseCrewCapacity(Width);
+            if (Grid == null) return GetBaseCrewCapacity(Width);
             int total = 0;
-            for (int i = 0; i < Modules.Length; i++)
-                total += GetModuleCrewSlots(Modules[i]);
-            return Mathf.Max(1, total); // always at least 1 (the paddler/oarsman)
+            int cols = Grid.GetLength(0);
+            int rows = Grid.GetLength(1);
+            for (int c = 0; c < cols; c++)
+                for (int r = 0; r < rows; r++)
+                    total += GetModuleCrewSlots(Grid[c, r]);
+            return Mathf.Max(1, total);
         }
 
         /// <summary>
-        /// Cargo capacity derived from installed modules.
-        /// Base: 1 per tile-width. Each CargoHatch adds +3. Crane adds +1.
+        /// Cargo capacity derived from Store modules in the 2D grid.
+        /// Base: 1 per column. Each Store adds +3. Crane adds +1.
         /// </summary>
-        private int GetModuleCargoCapacity()
+        private int GetGridCargoCapacity()
         {
-            if (Modules == null) return GetBaseCargoCapacity(Width);
-            int total = Width; // base 1 per tile
-            for (int i = 0; i < Modules.Length; i++)
-            {
-                if (Modules[i] == DeckModule.CargoHatch) total += 3;
-                else if (Modules[i] == DeckModule.Crane) total += 1;
-            }
+            if (Grid == null) return GetBaseCargoCapacity(Width);
+            int total = Width; // base 1 per column
+            int cols = Grid.GetLength(0);
+            int rows = Grid.GetLength(1);
+            for (int c = 0; c < cols; c++)
+                for (int r = 0; r < rows; r++)
+                {
+                    if (Grid[c, r] == ShipModule.Store) total += 3;
+                    else if (Grid[c, r] == ShipModule.Crane) total += 1;
+                }
             return total;
         }
 
         /// <summary>Crew slots contributed by a single module.</summary>
-        public static int GetModuleCrewSlots(DeckModule module)
+        public static int GetModuleCrewSlots(ShipModule module)
         {
             switch (module)
             {
-                case DeckModule.Helm:       return 1;  // captain
-                case DeckModule.Mast:       return 2;  // riggers
-                case DeckModule.Cannon:     return 1;  // gunner
-                case DeckModule.Crane:      return 1;  // operator
-                case DeckModule.Oars:       return 1;  // rower
-                case DeckModule.Cabin:      return 2;  // extra bunks
-                case DeckModule.FishingRig: return 1;  // fisher
-                case DeckModule.Lookout:    return 1;  // lookout
-                case DeckModule.CargoHatch: return 0;
-                case DeckModule.None:       return 0;
+                case ShipModule.Helm:       return 1;  // captain
+                case ShipModule.Mast:       return 2;  // riggers
+                case ShipModule.Cannon:     return 1;  // gunner
+                case ShipModule.Crane:      return 1;  // operator
+                case ShipModule.Oars:       return 1;  // rower
+                case ShipModule.Cabin:      return 2;  // extra bunks
+                case ShipModule.FishingRig: return 1;  // fisher
+                case ShipModule.Lookout:    return 1;  // lookout
+                case ShipModule.Kitchen:    return 1;  // cook
                 default:                    return 0;
             }
         }
 
         /// <summary>
-        /// Default module layout for a given ship width.
+        /// Default 2D module grid for a given ship width.
         /// Provides a balanced starting configuration per hull class.
-        /// Index 0 = stern (helm), last index = bow.
+        /// [col, row] — col: stern(0) to bow(Width-1), row: hold(0) to top.
         /// </summary>
-        public static DeckModule[] GetDefaultModules(int width)
+        public static ShipModule[,] GetDefaultGrid(int width)
+        {
+            int w = Mathf.Clamp(width, 1, 5);
+            int h = GetHeight(w);
+            var grid = new ShipModule[w, h];
+
+            // Fill with Air by default
+            for (int c = 0; c < w; c++)
+                for (int r = 0; r < h; r++)
+                    grid[c, r] = ShipModule.Air;
+
+            switch (w)
+            {
+                case 1: // Canoe — single cell with oars
+                    grid[0, 0] = ShipModule.Oars;
+                    break;
+
+                case 2: // Sloop (2×2)
+                    // Row 1 (deck): Helm, Mast
+                    grid[0, 1] = ShipModule.Helm;
+                    grid[1, 1] = ShipModule.Mast;
+                    // Row 0 (hold): Store, Store
+                    grid[0, 0] = ShipModule.Store;
+                    grid[1, 0] = ShipModule.Store;
+                    break;
+
+                case 3: // Brigantine (3×3)
+                    // Row 2 (deck): Helm, Mast, Cannon
+                    grid[0, 2] = ShipModule.Helm;
+                    grid[1, 2] = ShipModule.Mast;
+                    grid[2, 2] = ShipModule.Cannon;
+                    // Row 1 (between-decks): Cabin, Store, Store
+                    grid[0, 1] = ShipModule.Cabin;
+                    grid[1, 1] = ShipModule.Store;
+                    grid[2, 1] = ShipModule.Store;
+                    // Row 0 (hold): Air, Store, Magazine
+                    grid[1, 0] = ShipModule.Store;
+                    grid[2, 0] = ShipModule.Magazine;
+                    break;
+
+                case 4: // Frigate (4×3)
+                    // Row 2 (deck): Helm, Mast, Cannon, Mast
+                    grid[0, 2] = ShipModule.Helm;
+                    grid[1, 2] = ShipModule.Mast;
+                    grid[2, 2] = ShipModule.Cannon;
+                    grid[3, 2] = ShipModule.Mast;
+                    // Row 1 (between-decks): Cabin, Store, Store, Cabin
+                    grid[0, 1] = ShipModule.Cabin;
+                    grid[1, 1] = ShipModule.Store;
+                    grid[2, 1] = ShipModule.Store;
+                    grid[3, 1] = ShipModule.Cabin;
+                    // Row 0 (hold): Air, Store, Store, Magazine
+                    grid[1, 0] = ShipModule.Store;
+                    grid[2, 0] = ShipModule.Store;
+                    grid[3, 0] = ShipModule.Magazine;
+                    break;
+
+                default: // Ship of the Line (5×4) — matches user spec
+                    // Row 3 (superstructure): Wheel, Air, Sail, Crane, Air
+                    grid[0, 3] = ShipModule.Wheel;
+                    grid[2, 3] = ShipModule.Sail;
+                    grid[3, 3] = ShipModule.Crane;
+                    // Row 2 (deck): Helm, Lookout, SailBase, CraneBase, FigureHead
+                    grid[0, 2] = ShipModule.Helm;
+                    grid[1, 2] = ShipModule.Lookout;
+                    grid[2, 2] = ShipModule.SailBase;
+                    grid[3, 2] = ShipModule.CraneBase;
+                    grid[4, 2] = ShipModule.FigureHead;
+                    // Row 1 (between-decks): Cabin, Cabin, Kitchen, Cannon, Cabin
+                    grid[0, 1] = ShipModule.Cabin;
+                    grid[1, 1] = ShipModule.Cabin;
+                    grid[2, 1] = ShipModule.Kitchen;
+                    grid[3, 1] = ShipModule.Cannon;
+                    grid[4, 1] = ShipModule.Cabin;
+                    // Row 0 (hold): Air, Store, Store, Store, Magazine
+                    grid[1, 0] = ShipModule.Store;
+                    grid[2, 0] = ShipModule.Store;
+                    grid[3, 0] = ShipModule.Store;
+                    grid[4, 0] = ShipModule.Magazine;
+                    break;
+            }
+
+            return grid;
+        }
+
+        /// <summary>Height (row count) for a given ship width.</summary>
+        public static int GetHeight(int width)
         {
             switch (Mathf.Clamp(width, 1, 5))
             {
-                case 1: // Canoe — just oars
-                    return new[] { DeckModule.Oars };
-
-                case 2: // Sloop — helm + mast
-                    return new[] { DeckModule.Helm, DeckModule.Mast };
-
-                case 3: // Brigantine — helm + mast + cannon
-                    return new[] { DeckModule.Helm, DeckModule.Mast, DeckModule.Cannon };
-
-                case 4: // Frigate — helm + mast + cannon + mast
-                    return new[] { DeckModule.Helm, DeckModule.Mast, DeckModule.Cannon, DeckModule.Mast };
-
-                default: // Ship of the Line — helm + mast + cannon + cannon + mast
-                    return new[] { DeckModule.Helm, DeckModule.Mast, DeckModule.Cannon, DeckModule.Cannon, DeckModule.Mast };
+                case 1:  return 1;   // Canoe: single row
+                case 2:  return 2;   // Sloop: deck + hold
+                case 3:  return 3;   // Brigantine: deck + between-decks + hold
+                case 4:  return 3;   // Frigate: deck + between-decks + hold
+                default: return 4;   // Ship of the Line: super + deck + between + hold
             }
         }
 
@@ -388,8 +502,8 @@ namespace PopVuj.Game
             get
             {
                 // Masts provide primary propulsion, Oars provide backup
-                int masts = CountModule(DeckModule.Mast);
-                int oars = CountModule(DeckModule.Oars);
+                int masts = CountModule(ShipModule.Mast);
+                int oars = CountModule(ShipModule.Oars);
                 float propulsion = masts * 1.0f + oars * 0.5f;
                 float baseSpeed = Mathf.Clamp(propulsion * 0.6f, 0.3f, 1.5f);
                 float crewRatio = CrewCapacity > 0 ? (float)CrewCount / CrewCapacity : 0f;
@@ -436,25 +550,30 @@ namespace PopVuj.Game
         public ShipSlotRole GetSlotRole(int slotIndex)
         {
             if (slotIndex == 0) return ShipSlotRole.Captain;
-            // Walk modules and assign roles by accumulated crew slots
+            // Walk grid cells and assign roles by accumulated crew slots
             int accumulated = 0;
-            if (Modules != null)
+            if (Grid != null)
             {
-                for (int m = 0; m < Modules.Length; m++)
+                int cols = Grid.GetLength(0);
+                int rows = Grid.GetLength(1);
+                for (int c = 0; c < cols; c++)
                 {
-                    int slots = GetModuleCrewSlots(Modules[m]);
-                    if (Modules[m] == DeckModule.Helm)
+                    for (int r = rows - 1; r >= 0; r--)  // top-down
                     {
-                        // Helm's 1 slot is the captain (slotIndex 0)
+                        var mod = Grid[c, r];
+                        int slots = GetModuleCrewSlots(mod);
+                        if (mod == ShipModule.Helm)
+                        {
+                            accumulated += slots;
+                            continue;
+                        }
+                        if (slotIndex < accumulated + slots)
+                        {
+                            if (mod == ShipModule.Cannon) return ShipSlotRole.Gunner;
+                            return ShipSlotRole.Sailor;
+                        }
                         accumulated += slots;
-                        continue;
                     }
-                    if (slotIndex < accumulated + slots)
-                    {
-                        if (Modules[m] == DeckModule.Cannon) return ShipSlotRole.Gunner;
-                        return ShipSlotRole.Sailor;
-                    }
-                    accumulated += slots;
                 }
             }
             return ShipSlotRole.Sailor;

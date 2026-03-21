@@ -90,15 +90,35 @@ namespace PopVuj.Game
             for (int i = 0; i < _city.Width; i++)
             {
                 int owner = _city.GetOwner(i);
-                if (owner != i) continue;
-
                 var type = _city.GetSurface(i);
+                float originX = i * CityRenderer.CellSize;
+
+                // ── Canal sewer beneath empty/tree (unowned slots) ──
+                if ((type == CellType.Empty || type == CellType.Tree) && owner < 0)
+                {
+                    float canalDepth = _city.GetSewerDepth(i);
+                    if (canalDepth <= 0.01f) continue;
+
+                    var canalType = _city.GetSewerAt(i);
+                    if (canalType == SewerType.None) continue;
+
+                    var canalGrid = StructureGrids.GetDefaultSewerGrid(canalType, 1, 1);
+                    var canalBP = new SewerBlueprint(canalType, canalGrid, originX, canalDepth, 0f);
+                    var canalResult = ProceduralAssembler.Build(canalBP, _sewerPalette);
+                    if (canalResult.IsValid)
+                    {
+                        canalResult.Root.transform.SetParent(_sewerInteriorParent.transform, false);
+                        _sewerAssemblies.Add(canalResult);
+                    }
+                    continue;
+                }
+
+                // Multi-tile buildings: only render at owner origin
+                if (owner != i) continue;
                 if (type == CellType.Empty || type == CellType.Tree) continue;
 
                 int bw = _city.GetBuildingWidth(i);
                 if (bw < 1) bw = 1;
-
-                float originX = i * CityRenderer.CellSize;
 
                 // ── Surface building interior ───────────────────
                 PierFixture[] fixtures = null;
@@ -108,7 +128,8 @@ namespace PopVuj.Game
                     for (int f = 0; f < bw; f++)
                         fixtures[f] = _city.GetPierFixture(i + f);
                 }
-                var bldgBP = new StructureBlueprint(type, bw, originX, RoadH, BuildingZ, fixtures,
+                var grid = StructureGrids.GetDefaultGrid(type, bw, fixtures);
+                var bldgBP = new StructureBlueprint(type, grid, originX, RoadH, BuildingZ,
                     resWood:  type == CellType.Warehouse ? _city.Wood  : 0,
                     resStone: type == CellType.Warehouse ? _city.Stone : 0,
                     resFood:  type == CellType.Warehouse ? _city.Food  : 0,
@@ -127,7 +148,9 @@ namespace PopVuj.Game
                 var sewType = _city.GetSewerAt(i);
                 if (sewType == SewerType.None) continue;
 
-                var sewBP = new SewerBlueprint(sewType, bw, originX, depth, BuildingZ);
+                int bldgLayers = StructureGrids.GetBuildingLayers(type);
+                var sewGrid = StructureGrids.GetDefaultSewerGrid(sewType, bw, bldgLayers);
+                var sewBP = new SewerBlueprint(sewType, sewGrid, originX, depth, 0f);
                 var sewResult = ProceduralAssembler.Build(sewBP, _sewerPalette);
                 if (sewResult.IsValid)
                 {

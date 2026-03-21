@@ -41,7 +41,7 @@ namespace PopVuj.Game
     /// </summary>
     public enum SewerType
     {
-        None       = 0,   // bare earth — Empty / Tree / Farm
+        None       = 0,   // no underground — Pier (over water)
         Drain      = 1,   // thin french drain — small buildings (House 1-wide)
         Den        = 2,   // sewer den — housing for homeless, proportional to house above
         Crypt      = 3,   // chapel undercroft — inverted cathedral, water collects here
@@ -50,6 +50,7 @@ namespace PopVuj.Game
         Bazaar     = 6,   // black market — underground trade / thieves guild
         Drydock    = 7,   // flooded excavation beneath shipyard
         Vault      = 8,   // reinforced warehouse cellar — deep item storage
+        Canal      = 9,   // connection passage — walkable sewer linking buildings underground
     }
 
     /// <summary>
@@ -66,18 +67,19 @@ namespace PopVuj.Game
     ///   Market     → Bazaar (smuggler corridors).
     ///   Fountain   → Cistern (water reservoir).
     ///   Shipyard   → Drydock (flooded excavation).
-    ///   Farm       → None (shallow roots, no underground space).
+    ///   Farm       → Canal (shallow roots, but canal runs beneath).
     ///   Pier/Crane → None (over water).
-    ///   Empty/Tree → None (bare earth).
+    ///   Empty/Tree → Canal (connection passage, depth=1, keeps sewers traversable).
     ///
     /// LAYOUT — Chapel at center, Harbor at right edge:
     ///
     ///                        ↑ Heavens (camera Y)
     ///   ┌──┬──┬──────────┬──┬──┬──┬──────┬──┬─────────┬──┬──┐
     ///   │🌲│  │  Chapel   │🌲│  │  │House │🌲│Shipyard │Cr│⛵│
-    ///   ├──┴──┴──────────┴──┴──┴──┴──────┴──┴─────────┼──┴──┤
-    ///   │  │  │▓▓Crypt▓▓▓│  │  │  │░Den░│  │░Drydock░│water│
+    ///   ├──┼──┼──────────┼──┼──┼──┼──────┼──┼─────────┼──┴──┤
+    ///   │░░│░░│▓▓Crypt▓▓▓│░░│░░│░░│░Den░│░░│░Drydock░│water│
     ///   └──┴──┴──────────┴──┴──┴──┴──────┴──┴─────────┴─────┘
+    ///    canal             canal         canal
     ///              ← inland    village    harbor →    ocean
     ///
     /// The relative widths of Chapel and Harbor define the civilization's
@@ -168,12 +170,16 @@ namespace PopVuj.Game
 
         /// <summary>
         /// Get the sewer archetype beneath a slot. Derived from the building above.
+        /// Canals only appear between the outermost buildings — not past the frontier.
         /// </summary>
         public SewerType GetSewerAt(int slot)
         {
             var bldg = GetBuildingAt(slot);
             int bw = GetBuildingWidthAt(slot);
-            return DeriveSewerType(bldg, bw);
+            var sew = DeriveSewerType(bldg, bw);
+            if (sew == SewerType.Canal && !IsWithinSettledRange(slot))
+                return SewerType.None;
+            return sew;
         }
 
         /// <summary>
@@ -184,6 +190,9 @@ namespace PopVuj.Game
         {
             var bldg = GetBuildingAt(slot);
             int bw = GetBuildingWidthAt(slot);
+            var sew = DeriveSewerType(bldg, bw);
+            if (sew == SewerType.Canal && !IsWithinSettledRange(slot))
+                return 0f;
             return DeriveSewerDepth(bldg, bw);
         }
 
@@ -194,6 +203,22 @@ namespace PopVuj.Game
             int own = _owner[slot];
             if (own < 0) return 0;
             return _buildingWidth[own];
+        }
+
+        /// <summary>
+        /// True if the slot is between at least one building to the left
+        /// and one to the right — i.e. within the settled city, not wilderness.
+        /// </summary>
+        private bool IsWithinSettledRange(int slot)
+        {
+            bool hasLeft = false, hasRight = false;
+            for (int i = 0; i < slot && !hasLeft; i++)
+                if (_owner[i] == i && _surface[i] != CellType.Empty && _surface[i] != CellType.Tree)
+                    hasLeft = true;
+            for (int i = slot + 1; i < Width && !hasRight; i++)
+                if (_owner[i] == i && _surface[i] != CellType.Empty && _surface[i] != CellType.Tree)
+                    hasRight = true;
+            return hasLeft && hasRight;
         }
 
         // ── Sewer derivation rules ──────────────────────────────
@@ -212,31 +237,38 @@ namespace PopVuj.Game
                 case CellType.Shipyard:  return SewerType.Drydock;
                 case CellType.Warehouse: return SewerType.Vault;
                 case CellType.Pier:      return SewerType.None;   // over water — no sewer
+                case CellType.Farm:
+                case CellType.Empty:
+                case CellType.Tree:      return SewerType.Canal;  // connection passage
                 default:                return SewerType.None;
             }
         }
 
-        /// <summary>Map surface building → sewer depth (world units).</summary>
+        /// <summary>
+        /// Map surface building → sewer depth (world units).
+        /// Depth = ceil(buildingLayers / 2) — one world unit per sewer layer,
+        /// matching building story height so floors line up.
+        /// </summary>
         public static float DeriveSewerDepth(CellType surface, int buildingWidth)
         {
-            // Depth scales with building height; wider buildings go deeper
-            float baseDepth;
+            int bldgLayers;
             switch (surface)
             {
-                case CellType.House:    baseDepth = 1f; break;
-                case CellType.Chapel:   baseDepth = 2f; break;   // deep crypt
-                case CellType.Workshop: baseDepth = 1f; break;
-                case CellType.Market:   baseDepth = 1f; break;
-                case CellType.Fountain: baseDepth = 1f; break;   // cistern
-                case CellType.Shipyard:  baseDepth = 1f; break;   // drydock
-                case CellType.Warehouse: baseDepth = 2f; break;  // deep vault
-                case CellType.Farm:      return 0f;               // just roots
-                case CellType.Pier:     return 0f;                  // over water
-                default:                return 0f;
+                case CellType.House:     bldgLayers = 2; break;
+                case CellType.Chapel:    bldgLayers = 3; break;
+                case CellType.Workshop:  bldgLayers = 2; break;
+                case CellType.Market:    bldgLayers = 1; break;
+                case CellType.Fountain:  bldgLayers = 1; break;
+                case CellType.Shipyard:  bldgLayers = 2; break;
+                case CellType.Warehouse: bldgLayers = 3; break;
+                case CellType.Farm:
+                case CellType.Empty:
+                case CellType.Tree:      return 1f;               // canal — 1 layer
+                case CellType.Pier:      return 0f;
+                default:                 return 0f;
             }
-            // Wider buildings dig deeper (diminishing returns)
-            float widthBonus = buildingWidth > 1 ? (buildingWidth - 1) * 1f : 0f;
-            return baseDepth + widthBonus;
+            // sewer layers = ceil(building layers / 2), 1 world unit per layer
+            return Mathf.CeilToInt(bldgLayers / 2f) * 1f;
         }
 
         // ── Standard queries ────────────────────────────────────

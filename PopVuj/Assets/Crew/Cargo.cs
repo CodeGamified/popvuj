@@ -87,92 +87,92 @@ namespace PopVuj.Crew
             {
                 case CargoKind.Log:
                     SpeedMultiplier = 0.50f;   // logs are heavy and awkward
-                    FootprintBonus  = 0.36f;   // log sticks out in front & behind
-                    VisualWidth     = 0.44f;   // long horizontal
-                    VisualHeight    = 0.08f;   // thin
-                    VisualDepth     = 0.08f;
-                    CarryOffsetY    = 0.12f;   // on shoulder
+                    FootprintBonus  = 0.65f;   // log sticks out in front & behind
+                    VisualWidth     = 0.79f;   // long horizontal
+                    VisualHeight    = 0.15f;   // thin
+                    VisualDepth     = 0.15f;
+                    CarryOffsetY    = 0.22f;   // on shoulder
                     break;
 
                 case CargoKind.Crate:
                     SpeedMultiplier = 0.65f;
-                    FootprintBonus  = 0.16f;
-                    VisualWidth     = 0.14f;
-                    VisualHeight    = 0.14f;
-                    VisualDepth     = 0.14f;
-                    CarryOffsetY    = 0.16f;   // held in front
+                    FootprintBonus  = 0.29f;
+                    VisualWidth     = 0.25f;
+                    VisualHeight    = 0.25f;
+                    VisualDepth     = 0.25f;
+                    CarryOffsetY    = 0.29f;   // held in front
                     break;
 
                 case CargoKind.Grain:
                     SpeedMultiplier = 0.70f;
-                    FootprintBonus  = 0.10f;
-                    VisualWidth     = 0.12f;
-                    VisualHeight    = 0.16f;
-                    VisualDepth     = 0.10f;
-                    CarryOffsetY    = 0.14f;   // sack over shoulder
+                    FootprintBonus  = 0.18f;
+                    VisualWidth     = 0.22f;
+                    VisualHeight    = 0.29f;
+                    VisualDepth     = 0.18f;
+                    CarryOffsetY    = 0.25f;   // sack over shoulder
                     break;
 
                 case CargoKind.Stone:
                     SpeedMultiplier = 0.40f;   // very heavy
-                    FootprintBonus  = 0.20f;
-                    VisualWidth     = 0.16f;
-                    VisualHeight    = 0.12f;
-                    VisualDepth     = 0.16f;
-                    CarryOffsetY    = 0.08f;   // low carry
+                    FootprintBonus  = 0.36f;
+                    VisualWidth     = 0.29f;
+                    VisualHeight    = 0.22f;
+                    VisualDepth     = 0.29f;
+                    CarryOffsetY    = 0.15f;   // low carry
                     break;
 
                 case CargoKind.Water:
                     SpeedMultiplier = 0.75f;
-                    FootprintBonus  = 0.08f;
-                    VisualWidth     = 0.10f;
-                    VisualHeight    = 0.12f;
-                    VisualDepth     = 0.10f;
-                    CarryOffsetY    = 0.10f;
+                    FootprintBonus  = 0.15f;
+                    VisualWidth     = 0.18f;
+                    VisualHeight    = 0.22f;
+                    VisualDepth     = 0.18f;
+                    CarryOffsetY    = 0.18f;
                     break;
 
                 case CargoKind.Fish:
                     SpeedMultiplier = 0.70f;
-                    FootprintBonus  = 0.10f;
-                    VisualWidth     = 0.12f;
-                    VisualHeight    = 0.14f;
-                    VisualDepth     = 0.10f;
-                    CarryOffsetY    = 0.12f;
+                    FootprintBonus  = 0.18f;
+                    VisualWidth     = 0.22f;
+                    VisualHeight    = 0.25f;
+                    VisualDepth     = 0.18f;
+                    CarryOffsetY    = 0.22f;
                     break;
 
                 case CargoKind.Rope:
                     SpeedMultiplier = 0.72f;
-                    FootprintBonus  = 0.12f;
-                    VisualWidth     = 0.12f;
-                    VisualHeight    = 0.12f;
-                    VisualDepth     = 0.12f;
-                    CarryOffsetY    = 0.12f;
+                    FootprintBonus  = 0.22f;
+                    VisualWidth     = 0.22f;
+                    VisualHeight    = 0.22f;
+                    VisualDepth     = 0.22f;
+                    CarryOffsetY    = 0.22f;
                     break;
 
                 case CargoKind.Plank:
                     SpeedMultiplier = 0.55f;
-                    FootprintBonus  = 0.28f;
-                    VisualWidth     = 0.36f;
-                    VisualHeight    = 0.06f;
-                    VisualDepth     = 0.10f;
-                    CarryOffsetY    = 0.12f;   // on shoulder like a log
+                    FootprintBonus  = 0.50f;
+                    VisualWidth     = 0.65f;
+                    VisualHeight    = 0.11f;
+                    VisualDepth     = 0.18f;
+                    CarryOffsetY    = 0.22f;   // on shoulder like a log
                     break;
 
                 case CargoKind.TradeCrate:
                     SpeedMultiplier = 0.60f;
-                    FootprintBonus  = 0.16f;
-                    VisualWidth     = 0.16f;
-                    VisualHeight    = 0.16f;
-                    VisualDepth     = 0.16f;
-                    CarryOffsetY    = 0.16f;
+                    FootprintBonus  = 0.29f;
+                    VisualWidth     = 0.29f;
+                    VisualHeight    = 0.29f;
+                    VisualDepth     = 0.29f;
+                    CarryOffsetY    = 0.29f;
                     break;
 
                 case CargoKind.ExoticGoods:
                     SpeedMultiplier = 0.65f;
-                    FootprintBonus  = 0.14f;
-                    VisualWidth     = 0.14f;
-                    VisualHeight    = 0.14f;
-                    VisualDepth     = 0.12f;
-                    CarryOffsetY    = 0.14f;
+                    FootprintBonus  = 0.25f;
+                    VisualWidth     = 0.25f;
+                    VisualHeight    = 0.25f;
+                    VisualDepth     = 0.22f;
+                    CarryOffsetY    = 0.25f;
                     break;
 
                 default: // None

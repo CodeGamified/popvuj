@@ -96,8 +96,8 @@ namespace PopVuj.Crew
         // ── Lane constants (shared) ─────────────────────────────
         public const float LANE_WIDTH = 0.12f;    // Z spacing between avoidance sub-lanes
         public const int   MAX_LANES  = 3;        // ±3 sub-lanes from directional home lane
-        public const float PERSON_FOOTPRINT = 0.20f;
-        public const float CART_FOOTPRINT   = 0.50f;
+        public const float PERSON_FOOTPRINT = 0.36f;
+        public const float CART_FOOTPRINT   = 0.90f;
 
         // ── Directional lane offsets ────────────────────────────
         // Road block centered at Z=0, spans -0.5 to 0.5.

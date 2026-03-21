@@ -9,34 +9,32 @@ namespace PopVuj.Game
     /// <summary>
     /// Procedural blueprint for a surface building's interior.
     ///
-    /// Emits parameterized parts based on building type and tile width:
-    ///   Chapel  → lectern + N pews (N scales with width)
-    ///   House   → beds + table
-    ///   Workshop → anvil / workbenches
-    ///   Farm    → troughs / plots
-    ///   Market  → stalls + crates
-    ///   Fountain → basin + column
+    /// Buildings are 2D grids of StructureModules [Width × Height]:
+    ///   - Columns run left(0) to right(Width-1)
+    ///   - Rows run ground(0) to top(Height-1)
     ///
-    /// Buildings are side-view cross-sections. Interior objects sit on
-    /// the building floor (Y = RoadH) and span the building's X extent.
-    /// Z positions place furniture at BuildingZ (behind road).
+    /// Structure emerges from the grid layout. An L-shaped chapel:
+    ///   Bell   | Air  | Air
+    ///   Cross  | Air  | Air
+    ///   Altar  | Pew  | Pew
     ///
-    /// All dimensions scale smoothly with building width — wider buildings
-    /// don't just duplicate; objects grow and spread proportionally.
+    /// Warehouses have cranes at the top layer, storage types below.
+    /// Each module type has its own visual emitter. Common structure
+    /// (back wall, floor slabs, roof) wraps occupied cells.
     /// </summary>
     public class StructureBlueprint : IProceduralBlueprint
     {
         private readonly CellType _type;
-        private readonly int _buildingWidth;
-        private readonly float _originX;    // world X of leftmost tile edge
-        private readonly float _roadH;      // road surface Y
-        private readonly float _buildingZ;  // Z depth for building furniture
-        private readonly PierFixture[] _pierFixtures; // per-slot fixtures for Pier buildings
+        private readonly StructureModule[,] _grid;
+        private readonly int _gridCols;
+        private readonly int _gridRows;
+        private readonly float _originX;
+        private readonly float _roadH;
+        private readonly float _buildingZ;
 
-        // Warehouse resource snapshot — drives dynamic shelf fill
+        // Warehouse resource snapshot
         private readonly int _resWood, _resStone, _resFood, _resGoods;
 
-        // Cell size from CityRenderer
         private const float Cell = CityRenderer.CellSize;
 
         // Color keys resolved by palette at assembly time
@@ -51,191 +49,996 @@ namespace PopVuj.Game
         private const string KGrain    = "grain";
         private const string KRoof     = "roof";
 
-        public StructureBlueprint(CellType type, int buildingWidth, float originX,
+        public StructureBlueprint(CellType type, StructureModule[,] grid,
+                                   float originX,
                                    float roadH = 0.3f, float buildingZ = 1.0f,
-                                   PierFixture[] pierFixtures = null,
                                    int resWood = 0, int resStone = 0,
                                    int resFood = 0, int resGoods = 0)
         {
             _type = type;
-            _buildingWidth = Mathf.Max(1, buildingWidth);
+            _grid = grid;
+            _gridCols = grid.GetLength(0);
+            _gridRows = grid.GetLength(1);
             _originX = originX;
             _roadH = roadH;
             _buildingZ = buildingZ;
-            _pierFixtures = pierFixtures;
             _resWood = resWood;
             _resStone = resStone;
             _resFood = resFood;
             _resGoods = resGoods;
         }
 
-        public string DisplayName => $"{_type}_{_buildingWidth}w";
+        public string DisplayName => $"{_type}_{_gridCols}w";
         public ProceduralLODHint LODHint => ProceduralLODHint.Standard;
         public string PaletteId => "popvuj_structures";
 
+        // Grid cell dimensions (world units)
+        private float CellW => (_gridCols * Cell) / _gridCols; // = Cell = 1.0
+        private float StoryH => GetTotalHeight() / _gridRows;
+
         public ProceduralPartDef[] GetParts()
         {
-            var parts = new List<ProceduralPartDef>(16);
-            float totalW = _buildingWidth * Cell;
-            float cx = _originX + totalW * 0.5f; // center X
+            var parts = new List<ProceduralPartDef>(32);
+            float totalW = _gridCols * Cell;
+            float totalH = GetTotalHeight();
 
-            switch (_type)
+            // ── Common structure (walls, floors, roof) ──────────
+            EmitCommonStructure(parts, totalW, totalH);
+
+            // ── Per-cell module rendering ────────────────────────
+            // Pre-count store modules for resource distribution
+            int woodStores  = CountModule(StructureModule.WoodStore);
+            int stoneStores = CountModule(StructureModule.StoneStore);
+            int foodStores  = CountModule(StructureModule.FoodStore);
+            int goodsStores = CountModule(StructureModule.GoodsStore);
+            int woodIdx = 0, stoneIdx = 0, foodIdx = 0, goodsIdx = 0;
+
+            for (int col = 0; col < _gridCols; col++)
             {
-                case CellType.Chapel:   EmitChapel(parts, totalW, cx);   break;
-                case CellType.House:    EmitHouse(parts, totalW, cx);    break;
-                case CellType.Workshop: EmitWorkshop(parts, totalW, cx); break;
-                case CellType.Farm:     EmitFarm(parts, totalW, cx);     break;
-                case CellType.Market:   EmitMarket(parts, totalW, cx);   break;
-                case CellType.Fountain: EmitFountain(parts, totalW, cx); break;
-                case CellType.Shipyard:  EmitShipyard(parts, totalW, cx);  break;
-                case CellType.Pier:      EmitPier(parts, totalW, cx);      break;
-                case CellType.Warehouse: EmitWarehouse(parts, totalW, cx); break;
+                for (int row = 0; row < _gridRows; row++)
+                {
+                    StructureModule mod = _grid[col, row];
+                    if (mod == StructureModule.Air) continue;
+
+                    float cx = _originX + (col + 0.5f) * CellW;
+                    float cy = _roadH + (row + 0.5f) * StoryH;
+
+                    switch (mod)
+                    {
+                        // Chapel
+                        case StructureModule.Bell:     EmitBell(parts, cx, cy, col, row);     break;
+                        case StructureModule.Altar:    EmitAltar(parts, cx, cy, col, row);    break;
+                        case StructureModule.Pew:      EmitPew(parts, cx, cy, col, row);      break;
+                        case StructureModule.Lectern:  EmitLectern(parts, cx, cy, col, row);  break;
+                        case StructureModule.Cross:    EmitCross(parts, cx, cy, col, row);    break;
+                        // House
+                        case StructureModule.Bed:       EmitBed(parts, cx, cy, col, row);        break;
+                        case StructureModule.Table:     EmitTable(parts, cx, cy, col, row);      break;
+                        case StructureModule.Fireplace: EmitFireplace(parts, cx, cy, col, row);  break;
+                        // Workshop
+                        case StructureModule.Anvil:     EmitAnvil(parts, cx, cy, col, row);      break;
+                        case StructureModule.Workbench: EmitWorkbench(parts, cx, cy, col, row);  break;
+                        case StructureModule.Forge:     EmitForge(parts, cx, cy, col, row);      break;
+                        // Warehouse
+                        case StructureModule.WCrane:    EmitWarehouseCrane(parts, cx, cy, col, row); break;
+                        case StructureModule.Desk:      EmitDesk(parts, cx, cy, col, row);       break;
+                        case StructureModule.WoodStore:
+                            EmitStoreCell(parts, cx, cy, col, row, KWood, "wood",
+                                _resWood, woodStores, ref woodIdx);
+                            break;
+                        case StructureModule.StoneStore:
+                            EmitStoreCell(parts, cx, cy, col, row, KStone, "stone",
+                                _resStone, stoneStores, ref stoneIdx);
+                            break;
+                        case StructureModule.FoodStore:
+                            EmitStoreCell(parts, cx, cy, col, row, KGrain, "food",
+                                _resFood, foodStores, ref foodIdx);
+                            break;
+                        case StructureModule.GoodsStore:
+                            EmitStoreCell(parts, cx, cy, col, row, KMetal, "goods",
+                                _resGoods, goodsStores, ref goodsIdx);
+                            break;
+                        // Market
+                        case StructureModule.Stall:      EmitStall(parts, cx, cy, col, row);      break;
+                        case StructureModule.MarketCrate: EmitMarketCrate(parts, cx, cy, col, row); break;
+                        // Farm
+                        case StructureModule.Crop:       EmitCrop(parts, cx, cy, col, row);       break;
+                        case StructureModule.Trough:     EmitTrough(parts, cx, cy, col, row);     break;
+                        // Fountain
+                        case StructureModule.Basin:      EmitBasin(parts, cx, cy, col, row);      break;
+                        case StructureModule.Spout:      EmitSpout(parts, cx, cy, col, row);      break;
+                        // Shipyard
+                        case StructureModule.DrydockFrame: EmitDrydockFrame(parts, cx, cy, col, row); break;
+                        case StructureModule.TimberStack:  EmitTimberStack(parts, cx, cy, col, row);  break;
+                        // Pier
+                        case StructureModule.PierDeck:    EmitPierDeck(parts, cx, cy, col, row);    break;
+                        case StructureModule.PierCrane:   EmitPierCrane(parts, cx, cy, col, row);   break;
+                        case StructureModule.PierCannon:  EmitPierCannon(parts, cx, cy, col, row);  break;
+                        case StructureModule.PierFishing: EmitPierFishing(parts, cx, cy, col, row); break;
+                    }
+                }
             }
 
             return parts.ToArray();
         }
 
-        // ═══════════════════════════════════════════════════════════════
-        // CHAPEL — lectern at left, pews filling the width
-        // ═══════════════════════════════════════════════════════════════
-
-        private void EmitChapel(List<ProceduralPartDef> p, float totalW, float cx)
+        private int CountModule(StructureModule module)
         {
-            float floorY = _roadH;
-            float h = GetHeight();
-            // Back wall — thin vertical slab at full height
-            p.Add(new ProceduralPartDef("chapel_backwall", PrimitiveType.Cube,
-                new Vector3(cx, floorY + h * 0.5f, _buildingZ + Cell * 0.45f),
-                new Vector3(totalW * 0.90f, h, 0.04f), KWall));
-
-            // Floor
-            p.Add(new ProceduralPartDef("chapel_floor", PrimitiveType.Cube,
-                new Vector3(cx, floorY + 0.02f, _buildingZ),
-                new Vector3(totalW * 0.88f, 0.04f, Cell * 0.85f), KStone));
-
-            // Lectern — at the left 15% of the building
-            float lecternX = _originX + totalW * 0.12f;
-            float lecternW = Mathf.Lerp(0.08f, 0.12f, (_buildingWidth - 1) / 4f);
-            float lecternH = Mathf.Lerp(0.24f, 0.32f, (_buildingWidth - 1) / 4f);
-            p.Add(new ProceduralPartDef("lectern_base", PrimitiveType.Cube,
-                new Vector3(lecternX, floorY + lecternH * 0.5f, _buildingZ),
-                new Vector3(lecternW, lecternH, lecternW * 0.8f), KWood));
-
-            // Cross / holy symbol above lectern
-            float crossH = Mathf.Lerp(0.12f, 0.20f, (_buildingWidth - 1) / 4f);
-            p.Add(new ProceduralPartDef("cross_vert", PrimitiveType.Cube,
-                new Vector3(lecternX, floorY + lecternH + crossH * 0.5f + 0.04f, _buildingZ + Cell * 0.35f),
-                new Vector3(0.024f, crossH, 0.024f), KGold));
-            p.Add(new ProceduralPartDef("cross_horiz", PrimitiveType.Cube,
-                new Vector3(lecternX, floorY + lecternH + crossH * 0.7f + 0.04f, _buildingZ + Cell * 0.35f),
-                new Vector3(crossH * 0.6f, 0.024f, 0.024f), KGold));
-
-            // Pews — fill the remaining 75% of width
-            float pewStartX = _originX + totalW * 0.28f;
-            float pewEndX = _originX + totalW * 0.95f;
-            float pewRegion = pewEndX - pewStartX;
-            int pewCount = Mathf.Max(1, _buildingWidth * 2);
-            float pewSpacing = pewRegion / pewCount;
-            float pewW = pewSpacing * 0.65f;
-            float pewH = Mathf.Lerp(0.10f, 0.14f, (_buildingWidth - 1) / 4f);
-            float pewD = Cell * 0.3f;
-
-            for (int i = 0; i < pewCount; i++)
-            {
-                float px = pewStartX + pewSpacing * (i + 0.5f);
-                // Seat
-                p.Add(new ProceduralPartDef($"pew_seat_{i}", PrimitiveType.Cube,
-                    new Vector3(px, floorY + pewH * 0.5f, _buildingZ),
-                    new Vector3(pewW, pewH, pewD), KWood));
-                // Back rest
-                p.Add(new ProceduralPartDef($"pew_back_{i}", PrimitiveType.Cube,
-                    new Vector3(px, floorY + pewH + 0.06f, _buildingZ + pewD * 0.4f),
-                    new Vector3(pewW, 0.12f, 0.03f), KWood));
-            }
-
-            // Roof beam
-            p.Add(new ProceduralPartDef("chapel_roof", PrimitiveType.Cube,
-                new Vector3(cx, floorY + h - 0.04f, _buildingZ),
-                new Vector3(totalW * 0.90f, 0.06f, Cell * 0.85f), KRoof));
+            int count = 0;
+            for (int c = 0; c < _gridCols; c++)
+                for (int r = 0; r < _gridRows; r++)
+                    if (_grid[c, r] == module) count++;
+            return count;
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // HOUSE — beds along the back wall, table in center
+        // COMMON STRUCTURE — walls, floor slabs, roof
         // ═══════════════════════════════════════════════════════════════
 
-        private void EmitHouse(List<ProceduralPartDef> p, float totalW, float cx)
+        private void EmitCommonStructure(List<ProceduralPartDef> p, float totalW, float totalH)
         {
             float floorY = _roadH;
-            float h = GetHeight();
+            float cx = _originX + totalW * 0.5f;
+            float sH = StoryH;
+            bool isPier = _type == CellType.Pier;
+            bool isFarm = _type == CellType.Farm;
+            bool isFountain = _type == CellType.Fountain;
 
-            // Back wall
-            p.Add(new ProceduralPartDef("house_backwall", PrimitiveType.Cube,
-                new Vector3(cx, floorY + h * 0.5f, _buildingZ + Cell * 0.45f),
-                new Vector3(totalW * 0.90f, h, 0.04f), KWall));
+            if (isPier)
+            {
+                EmitPierStructure(p, totalW, cx);
+                return;
+            }
 
-            // Floor
-            p.Add(new ProceduralPartDef("house_floor", PrimitiveType.Cube,
+            // ── Per-cell back wall + floor panels ───────────────
+            // Each occupied cell gets its own background so L-shapes
+            // and irregular layouts emerge naturally from the grid.
+            float cW = CellW;
+            for (int col = 0; col < _gridCols; col++)
+            {
+                for (int row = 0; row < _gridRows; row++)
+                {
+                    if (_grid[col, row] == StructureModule.Air) continue;
+
+                    float cellCX = _originX + (col + 0.5f) * cW;
+                    float cellCY = floorY + (row + 0.5f) * sH;
+
+                    // Back wall panel
+                    if (!isFarm && !isFountain)
+                    {
+                        p.Add(new ProceduralPartDef($"backwall_{col}_{row}", PrimitiveType.Cube,
+                            new Vector3(cellCX, cellCY, _buildingZ + Cell * 0.45f),
+                            new Vector3(cW * 0.90f, sH, 0.04f), KWall));
+                    }
+
+                    // Floor slab at bottom of cell
+                    float fy = floorY + row * sH;
+                    string floorColor = (row == 0 && _type == CellType.Warehouse) ? KStone
+                        : isFarm ? KFloor : KWood;
+                    p.Add(new ProceduralPartDef($"floor_{col}_{row}", PrimitiveType.Cube,
+                        new Vector3(cellCX, fy + 0.02f, _buildingZ),
+                        new Vector3(cW * 0.88f, 0.04f, Cell * 0.85f), floorColor));
+                }
+            }
+
+            // ── Side columns per occupied column-span ───────────
+            if (_gridRows >= 2)
+            {
+                float colWW = 0.06f;
+                // Left column: at leftmost occupied column
+                for (int col = 0; col < _gridCols; col++)
+                {
+                    int lo = -1, hi = -1;
+                    for (int row = 0; row < _gridRows; row++)
+                    {
+                        if (_grid[col, row] != StructureModule.Air)
+                        {
+                            if (lo < 0) lo = row;
+                            hi = row;
+                        }
+                    }
+                    if (lo < 0) continue;
+
+                    float spanH = (hi - lo + 1) * sH;
+                    float spanCY = floorY + (lo + (hi - lo + 1) * 0.5f) * sH;
+
+                    // Left edge of this column
+                    float lx = _originX + col * cW + colWW * 0.5f + cW * 0.02f;
+                    p.Add(new ProceduralPartDef($"col_l_{col}", PrimitiveType.Cube,
+                        new Vector3(lx, spanCY, _buildingZ),
+                        new Vector3(colWW, spanH, colWW), KWood));
+
+                    // Right edge of this column
+                    float rx = _originX + (col + 1) * cW - colWW * 0.5f - cW * 0.02f;
+                    p.Add(new ProceduralPartDef($"col_r_{col}", PrimitiveType.Cube,
+                        new Vector3(rx, spanCY, _buildingZ),
+                        new Vector3(colWW, spanH, colWW), KWood));
+                }
+            }
+
+            // ── Roof per occupied top cell ──────────────────────
+            if (!isFarm && !isFountain)
+            {
+                for (int col = 0; col < _gridCols; col++)
+                {
+                    // Find highest occupied row in this column
+                    int topRow = -1;
+                    for (int row = _gridRows - 1; row >= 0; row--)
+                    {
+                        if (_grid[col, row] != StructureModule.Air)
+                        { topRow = row; break; }
+                    }
+                    if (topRow < 0) continue;
+
+                    float roofCX = _originX + (col + 0.5f) * cW;
+                    float roofY = floorY + (topRow + 1) * sH - 0.04f;
+                    p.Add(new ProceduralPartDef($"roof_{col}", PrimitiveType.Cube,
+                        new Vector3(roofCX, roofY, _buildingZ),
+                        new Vector3(cW * 0.92f, 0.06f, Cell * 0.88f), KRoof));
+                }
+            }
+
+            // ── Farm fence (open-air) ───────────────────────────
+            if (isFarm)
+            {
+                float postH = 0.24f;
+                p.Add(new ProceduralPartDef("fence_l", PrimitiveType.Cube,
+                    new Vector3(_originX + 0.04f, floorY + postH * 0.5f, _buildingZ - Cell * 0.35f),
+                    new Vector3(0.04f, postH, 0.04f), KWood));
+                p.Add(new ProceduralPartDef("fence_r", PrimitiveType.Cube,
+                    new Vector3(_originX + totalW - 0.04f, floorY + postH * 0.5f, _buildingZ - Cell * 0.35f),
+                    new Vector3(0.04f, postH, 0.04f), KWood));
+                p.Add(new ProceduralPartDef("fence_rail", PrimitiveType.Cube,
+                    new Vector3(cx, floorY + postH * 0.7f, _buildingZ - Cell * 0.35f),
+                    new Vector3(totalW - 0.08f, 0.03f, 0.03f), KWood));
+            }
+
+            // ── Market support posts ────────────────────────────
+            if (_type == CellType.Market)
+            {
+                float postH = totalH * 0.8f;
+                p.Add(new ProceduralPartDef("post_l", PrimitiveType.Cube,
+                    new Vector3(_originX + totalW * 0.05f, floorY + postH * 0.5f, _buildingZ - Cell * 0.35f),
+                    new Vector3(0.04f, postH, 0.04f), KWood));
+                p.Add(new ProceduralPartDef("post_r", PrimitiveType.Cube,
+                    new Vector3(_originX + totalW * 0.95f, floorY + postH * 0.5f, _buildingZ - Cell * 0.35f),
+                    new Vector3(0.04f, postH, 0.04f), KWood));
+            }
+        }
+
+        /// <summary>Pier common structure — pilings, deck, railings, connector.</summary>
+        private void EmitPierStructure(List<ProceduralPartDef> p, float totalW, float cx)
+        {
+            float floorY = _roadH;
+
+            // Plank deck
+            p.Add(new ProceduralPartDef("pier_deck", PrimitiveType.Cube,
                 new Vector3(cx, floorY + 0.02f, _buildingZ),
-                new Vector3(totalW * 0.88f, 0.04f, Cell * 0.85f), KWood));
+                new Vector3(totalW * 0.92f, 0.06f, Cell * 0.80f), KWood));
 
-            // Beds — one per two residents slot, evenly spaced
-            int bedCount = Mathf.Max(1, _buildingWidth);
-            float bedRegion = totalW * 0.9f;
-            float bedSpacing = bedRegion / bedCount;
-            float bedW = bedSpacing * 0.7f;
+            // Pilings
+            int pilingCount = Mathf.Max(2, _gridCols + 1);
+            float pilingSpacing = totalW * 0.85f / (pilingCount - 1);
+            float pilingH = 0.60f;
+            for (int i = 0; i < pilingCount; i++)
+            {
+                float px = _originX + totalW * 0.075f + pilingSpacing * i;
+                p.Add(new ProceduralPartDef($"piling_{i}", PrimitiveType.Cube,
+                    new Vector3(px, floorY - pilingH * 0.5f, _buildingZ - Cell * 0.25f),
+                    new Vector3(0.06f, pilingH, 0.06f), KWood));
+                p.Add(new ProceduralPartDef($"piling_back_{i}", PrimitiveType.Cube,
+                    new Vector3(px, floorY - pilingH * 0.5f, _buildingZ + Cell * 0.25f),
+                    new Vector3(0.06f, pilingH, 0.06f), KWood));
+            }
+
+            // Rope railing
+            float railH = 0.12f;
+            p.Add(new ProceduralPartDef("rail_front", PrimitiveType.Cube,
+                new Vector3(cx, floorY + railH + 0.04f, _buildingZ - Cell * 0.35f),
+                new Vector3(totalW * 0.88f, 0.024f, 0.024f), KFabric));
+
+            // Bollards
+            float bollardH = 0.10f;
+            p.Add(new ProceduralPartDef("bollard_l", PrimitiveType.Cube,
+                new Vector3(_originX + 0.06f, floorY + bollardH * 0.5f + 0.04f, _buildingZ - Cell * 0.3f),
+                new Vector3(0.05f, bollardH, 0.05f), KWood));
+            p.Add(new ProceduralPartDef("bollard_r", PrimitiveType.Cube,
+                new Vector3(_originX + totalW - 0.06f, floorY + bollardH * 0.5f + 0.04f, _buildingZ - Cell * 0.3f),
+                new Vector3(0.05f, bollardH, 0.05f), KWood));
+
+            // L-connector from road to pier
+            float connCX = _originX + Cell * 0.5f;
+            float connZLen = 2f * Cell;
+            float connCZ = 0.5f;
+            p.Add(new ProceduralPartDef("connector_deck", PrimitiveType.Cube,
+                new Vector3(connCX, floorY + 0.02f, connCZ),
+                new Vector3(Cell, 0.06f, connZLen), KWood));
+            p.Add(new ProceduralPartDef("conn_piling_front", PrimitiveType.Cube,
+                new Vector3(connCX, floorY - pilingH * 0.5f, connCZ - connZLen * 0.3f),
+                new Vector3(0.06f, pilingH, 0.06f), KWood));
+            p.Add(new ProceduralPartDef("conn_piling_back", PrimitiveType.Cube,
+                new Vector3(connCX, floorY - pilingH * 0.5f, connCZ + connZLen * 0.3f),
+                new Vector3(0.06f, pilingH, 0.06f), KWood));
+            float railZLen = connZLen * 0.5f;
+            float railCZ = railZLen * 0.5f;
+            p.Add(new ProceduralPartDef("conn_rail_right", PrimitiveType.Cube,
+                new Vector3(connCX + Cell * 0.45f, floorY + railH + 0.04f, railCZ),
+                new Vector3(0.024f, 0.024f, railZLen), KFabric));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // HEIGHT LOOKUP (mirrors CityRenderer constants)
+        // ═══════════════════════════════════════════════════════════════
+
+        private float GetTotalHeight()
+        {
+            switch (_type)
+            {
+                case CellType.House:    return 2f;
+                case CellType.Chapel:   return 3f;
+                case CellType.Workshop: return 2f;
+                case CellType.Farm:     return 1f;
+                case CellType.Market:   return 1f;
+                case CellType.Fountain: return 1f;
+                case CellType.Shipyard: return 2f;
+                case CellType.Pier:     return 1f;
+                case CellType.Warehouse:return 3f;
+                default:                return 1f;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // CHAPEL MODULES — Bell, Altar, Pew, Lectern, Cross
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitBell(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            // Bell frame
+            p.Add(new ProceduralPartDef($"bell_frame_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy + sH * 0.2f, _buildingZ),
+                new Vector3(cW * 0.40f, 0.04f, cW * 0.40f), KWood));
+            // Bell body
+            p.Add(new ProceduralPartDef($"bell_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy, _buildingZ),
+                new Vector3(cW * 0.25f, sH * 0.40f, cW * 0.25f), KGold));
+            // Bell support posts
+            p.Add(new ProceduralPartDef($"bell_post_l_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx - cW * 0.18f, cy, _buildingZ),
+                new Vector3(0.03f, sH * 0.60f, 0.03f), KWood));
+            p.Add(new ProceduralPartDef($"bell_post_r_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx + cW * 0.18f, cy, _buildingZ),
+                new Vector3(0.03f, sH * 0.60f, 0.03f), KWood));
+        }
+
+        private void EmitAltar(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            // Altar table
+            float altH = sH * 0.30f;
+            float altW = cW * 0.60f;
+            p.Add(new ProceduralPartDef($"altar_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy - sH * 0.25f + altH * 0.5f, _buildingZ),
+                new Vector3(altW, altH, altW * 0.6f), KStone));
+            // Cross above altar
+            float crossH = sH * 0.20f;
+            p.Add(new ProceduralPartDef($"altar_cross_v_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy + sH * 0.10f, _buildingZ + Cell * 0.35f),
+                new Vector3(0.024f, crossH, 0.024f), KGold));
+            p.Add(new ProceduralPartDef($"altar_cross_h_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy + sH * 0.16f, _buildingZ + Cell * 0.35f),
+                new Vector3(crossH * 0.6f, 0.024f, 0.024f), KGold));
+        }
+
+        private void EmitPew(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float pewW = cW * 0.65f;
+            float pewH = sH * 0.14f;
+            float pewD = Cell * 0.3f;
+            float baseY = cy - sH * 0.35f;
+
+            // Try two .obj benches per cell
+            bool usedMesh = true;
+            for (int i = 0; i < 2; i++)
+            {
+                float px = cx + (i == 0 ? -cW * 0.15f : cW * 0.15f);
+                if (!ObjectScale.TryAdd(p, $"pew_{c}_{r}_{i}", "old_bench",
+                    new Vector3(px, baseY, _buildingZ), KWood))
+                { usedMesh = false; break; }
+            }
+            if (usedMesh) return;
+
+            // Fallback: two pew rows per cell
+            for (int i = 0; i < 2; i++)
+            {
+                float px = cx + (i == 0 ? -cW * 0.15f : cW * 0.15f);
+                // Seat
+                p.Add(new ProceduralPartDef($"pew_seat_{c}_{r}_{i}", PrimitiveType.Cube,
+                    new Vector3(px, baseY + pewH * 0.5f, _buildingZ),
+                    new Vector3(pewW * 0.40f, pewH, pewD), KWood));
+                // Back rest
+                p.Add(new ProceduralPartDef($"pew_back_{c}_{r}_{i}", PrimitiveType.Cube,
+                    new Vector3(px, baseY + pewH + 0.04f, _buildingZ + pewD * 0.4f),
+                    new Vector3(pewW * 0.40f, sH * 0.10f, 0.03f), KWood));
+            }
+        }
+
+        private void EmitLectern(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float lecW = cW * 0.20f;
+            float lecH = sH * 0.35f;
+            float baseY = cy - sH * 0.35f;
+
+            if (ObjectScale.TryAdd(p, $"lectern_{c}_{r}", "scroll_stand/scroll_stand_1",
+                new Vector3(cx, baseY + 0.04f, _buildingZ), KWood))
+                return;
+
+            p.Add(new ProceduralPartDef($"lectern_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy - sH * 0.15f, _buildingZ),
+                new Vector3(lecW, lecH, lecW * 0.8f), KWood));
+        }
+
+        private void EmitCross(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float crossH = sH * 0.40f;
+            p.Add(new ProceduralPartDef($"cross_v_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy, _buildingZ + Cell * 0.35f),
+                new Vector3(0.028f, crossH, 0.028f), KGold));
+            p.Add(new ProceduralPartDef($"cross_h_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy + crossH * 0.2f, _buildingZ + Cell * 0.35f),
+                new Vector3(crossH * 0.6f, 0.028f, 0.028f), KGold));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // HOUSE MODULES — Bed, Table, Fireplace
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitBed(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float bedW = cW * 0.70f;
             float bedH = 0.08f;
             float bedD = Cell * 0.35f;
+            float baseY = cy - sH * 0.35f;
+            // Frame
+            p.Add(new ProceduralPartDef($"bed_frame_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + bedH * 0.5f + 0.04f, _buildingZ + Cell * 0.2f),
+                new Vector3(bedW, bedH, bedD), KWood));
+            // Blanket
+            p.Add(new ProceduralPartDef($"bed_blanket_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + bedH + 0.06f, _buildingZ + Cell * 0.2f),
+                new Vector3(bedW * 0.90f, 0.04f, bedD * 0.85f), KFabric));
+        }
 
-            for (int i = 0; i < bedCount; i++)
-            {
-                float bx = _originX + totalW * 0.05f + bedSpacing * (i + 0.5f);
-                // Bed frame
-                p.Add(new ProceduralPartDef($"bed_frame_{i}", PrimitiveType.Cube,
-                    new Vector3(bx, floorY + bedH * 0.5f + 0.04f, _buildingZ + Cell * 0.2f),
-                    new Vector3(bedW, bedH, bedD), KWood));
-                // Blanket
-                p.Add(new ProceduralPartDef($"bed_blanket_{i}", PrimitiveType.Cube,
-                    new Vector3(bx, floorY + bedH + 0.06f, _buildingZ + Cell * 0.2f),
-                    new Vector3(bedW * 0.9f, 0.04f, bedD * 0.85f), KFabric));
-            }
+        private void EmitTable(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float tableW = cW * 0.55f;
+            float tableH = 0.16f;
+            float baseY = cy - sH * 0.35f;
 
-            // Table in center (only if width >= 2)
-            if (_buildingWidth >= 2)
-            {
-                float tableW = totalW * 0.3f;
-                float tableH = 0.16f;
-                p.Add(new ProceduralPartDef("table", PrimitiveType.Cube,
-                    new Vector3(cx, floorY + tableH * 0.5f + 0.04f, _buildingZ - Cell * 0.1f),
-                    new Vector3(tableW, tableH, Cell * 0.2f), KWood));
-            }
+            if (ObjectScale.TryAdd(p, $"table_{c}_{r}", "standing_two_legged_table_1",
+                new Vector3(cx, baseY + 0.04f, _buildingZ - Cell * 0.1f), KWood))
+                return;
 
-            // Roof
-            p.Add(new ProceduralPartDef("house_roof", PrimitiveType.Cube,
-                new Vector3(cx, floorY + h - 0.04f, _buildingZ),
-                new Vector3(totalW * 0.90f, 0.06f, Cell * 0.85f), KRoof));
+            p.Add(new ProceduralPartDef($"table_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + tableH * 0.5f + 0.04f, _buildingZ - Cell * 0.1f),
+                new Vector3(tableW, tableH, Cell * 0.2f), KWood));
+        }
+
+        private void EmitFireplace(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float fpW = cW * 0.40f;
+            float fpH = sH * 0.60f;
+            float baseY = cy - sH * 0.35f;
+
+            if (ObjectScale.TryAdd(p, $"fireplace_{c}_{r}", "stove",
+                new Vector3(cx, baseY + 0.04f, _buildingZ + Cell * 0.30f), KStone))
+                return;
+
+            // Chimney body
+            p.Add(new ProceduralPartDef($"fireplace_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy - sH * 0.10f, _buildingZ + Cell * 0.30f),
+                new Vector3(fpW, fpH, fpW), KStone));
+            // Fire opening
+            p.Add(new ProceduralPartDef($"fire_opening_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy - sH * 0.25f, _buildingZ + Cell * 0.15f),
+                new Vector3(fpW * 0.5f, fpH * 0.3f, 0.02f), KMetal));
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // WORKSHOP — workbenches with anvils
+        // WORKSHOP MODULES — Workbench, Anvil, Forge
         // ═══════════════════════════════════════════════════════════════
 
-        private void EmitWorkshop(List<ProceduralPartDef> p, float totalW, float cx)
+        private void EmitWorkbench(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float benchW = cW * 0.65f;
+            float benchH = 0.20f;
+            float benchD = Cell * 0.35f;
+            float baseY = cy - sH * 0.35f;
+
+            if (ObjectScale.TryAdd(p, $"bench_{c}_{r}", "trestle",
+                new Vector3(cx, baseY + 0.04f, _buildingZ + Cell * 0.05f), KWood))
+                return;
+
+            p.Add(new ProceduralPartDef($"bench_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + benchH * 0.5f + 0.04f, _buildingZ + Cell * 0.05f),
+                new Vector3(benchW, benchH, benchD), KWood));
+        }
+
+        private void EmitAnvil(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float benchH = 0.20f;
+            float baseY = cy - sH * 0.35f;
+
+            if (ObjectScale.TryAdd(p, $"anvil_{c}_{r}", "anvil_on_log",
+                new Vector3(cx, baseY + 0.04f, _buildingZ + Cell * 0.05f), KMetal))
+                return;
+
+            // Fallback: procedural primitives
+            // Stump
+            p.Add(new ProceduralPartDef($"anvil_stump_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + benchH * 0.5f + 0.04f, _buildingZ + Cell * 0.05f),
+                new Vector3(cW * 0.30f, benchH, cW * 0.30f), KWood));
+            // Anvil on top
+            p.Add(new ProceduralPartDef($"anvil_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + benchH + 0.08f, _buildingZ + Cell * 0.05f),
+                new Vector3(cW * 0.25f, 0.08f, cW * 0.20f), KMetal));
+        }
+
+        private void EmitForge(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float forgeW = cW * 0.45f;
+            float forgeH = sH * 0.70f;
+            float baseY = cy - sH * 0.35f;
+
+            if (ObjectScale.TryAdd(p, $"forge_{c}_{r}", "stove",
+                new Vector3(cx, baseY + 0.04f, _buildingZ + Cell * 0.30f), KStone))
+                return;
+
+            p.Add(new ProceduralPartDef($"forge_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy - sH * 0.10f, _buildingZ + Cell * 0.30f),
+                new Vector3(forgeW, forgeH, forgeW), KStone));
+            // Bellows
+            p.Add(new ProceduralPartDef($"bellows_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx - cW * 0.25f, cy - sH * 0.20f, _buildingZ + Cell * 0.10f),
+                new Vector3(cW * 0.15f, sH * 0.15f, cW * 0.10f), KWood));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // WAREHOUSE MODULES — WCrane, Store cells, Desk
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitWarehouseCrane(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float floorY = cy - sH * 0.5f;
+            float totalH = GetTotalHeight();
+            float craneZ = _buildingZ - Cell * 0.35f;
+
+            // A-frame legs
+            float legW = 0.05f;
+            float legH = totalH * 0.90f;
+            p.Add(new ProceduralPartDef($"crane_leg_l_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx - cW * 0.15f, floorY + legH * 0.5f, craneZ),
+                new Vector3(legW, legH, legW), KWood));
+            p.Add(new ProceduralPartDef($"crane_leg_r_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx + cW * 0.15f, floorY + legH * 0.5f, craneZ),
+                new Vector3(legW, legH, legW), KWood));
+            // Cross beam
+            p.Add(new ProceduralPartDef($"crane_beam_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + legH + 0.03f, craneZ),
+                new Vector3(cW * 0.35f, 0.05f, 0.05f), KWood));
+            // Rope
+            float ropeH = totalH * 0.65f;
+            p.Add(new ProceduralPartDef($"crane_rope_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + legH - ropeH * 0.5f, craneZ),
+                new Vector3(0.014f, ropeH, 0.014f), KFabric));
+            // Basket
+            p.Add(new ProceduralPartDef($"crane_basket_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + 0.08f, craneZ),
+                new Vector3(0.18f, 0.04f, 0.16f), KWood));
+            // Hook
+            p.Add(new ProceduralPartDef($"crane_hook_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + legH - ropeH + 0.02f, craneZ),
+                new Vector3(0.03f, 0.03f, 0.025f), KMetal));
+        }
+
+        /// <summary>
+        /// Warehouse store cell — shelf posts, boards, resource fill.
+        /// Resources distributed across all cells of that type.
+        /// </summary>
+        private void EmitStoreCell(List<ProceduralPartDef> p, float cx, float cy,
+            int c, int r, string colorKey, string tag,
+            int totalResource, int cellCount, ref int cellIndex)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.5f;
+            float postW = 0.03f;
+            float postH = sH * 0.85f;
+            float shelfW = cW * 0.70f;
+            float shelfD = Cell * 0.25f;
+
+            // Shelf posts
+            p.Add(new ProceduralPartDef($"store_postL_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx - shelfW * 0.45f, baseY + postH * 0.5f + 0.04f, _buildingZ + Cell * 0.20f),
+                new Vector3(postW, postH, postW), KWood));
+            p.Add(new ProceduralPartDef($"store_postR_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx + shelfW * 0.45f, baseY + postH * 0.5f + 0.04f, _buildingZ + Cell * 0.20f),
+                new Vector3(postW, postH, postW), KWood));
+
+            // Two shelf boards
+            for (int b = 1; b <= 2; b++)
+            {
+                float boardY = baseY + sH * b / 3f;
+                p.Add(new ProceduralPartDef($"store_board_{c}_{r}_{b}", PrimitiveType.Cube,
+                    new Vector3(cx, boardY, _buildingZ + Cell * 0.20f),
+                    new Vector3(shelfW, 0.025f, shelfD), KWood));
+            }
+
+            // Resource fill — distribute evenly across cells of this type
+            int perCell = cellCount > 0 ? Mathf.CeilToInt((float)totalResource / cellCount) : 0;
+            int remaining = Mathf.Max(0, totalResource - cellIndex * perCell);
+            int amount = Mathf.Min(perCell, remaining);
+            cellIndex++;
+
+            if (amount > 0)
+            {
+                // Pick mesh by resource type: wood→barrel, food→burlap, stone→barrel, goods→chest
+                string objName = tag == "food" ? "burlap_sack_one_sack"
+                    : tag == "goods" ? "rounded_chest_2"
+                    : "small_barrel_one_barrel";
+                float itemS = 0.09f;
+                int slotsPerBay = 3;
+                int filled = Mathf.Min(Mathf.CeilToInt((float)amount / 5), slotsPerBay);
+                for (int s = 0; s < filled; s++)
+                {
+                    float sy;
+                    if (s == 0)
+                        sy = baseY + 0.06f;
+                    else
+                        sy = baseY + sH * s / 3f + 0.025f;
+
+                    if (!ObjectScale.TryAdd(p, $"store_res_{tag}_{c}_{r}_{s}", objName,
+                        new Vector3(cx, sy, _buildingZ + Cell * 0.20f), colorKey))
+                    {
+                        p.Add(new ProceduralPartDef($"store_res_{tag}_{c}_{r}_{s}", PrimitiveType.Cube,
+                            new Vector3(cx, sy + itemS * 0.5f, _buildingZ + Cell * 0.20f),
+                            new Vector3(itemS, itemS, itemS), colorKey));
+                    }
+                }
+            }
+        }
+
+        private void EmitDesk(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float deskW = cW * 0.50f;
+            float deskH = 0.18f;
+            float baseY = cy - sH * 0.35f;
+
+            if (ObjectScale.TryAdd(p, $"desk_{c}_{r}", "standing_two_legged_table_1",
+                new Vector3(cx, baseY + 0.04f, _buildingZ), KWood))
+                return;
+
+            p.Add(new ProceduralPartDef($"desk_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + deskH * 0.5f + 0.04f, _buildingZ),
+                new Vector3(deskW, deskH, Cell * 0.25f), KWood));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // MARKET MODULES — Stall, Crate
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitStall(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.45f;
+            float counterH = 0.16f;
+            float counterW = cW * 0.70f;
+
+            // Counter — try trestle mesh
+            if (!ObjectScale.TryAdd(p, $"counter_{c}_{r}", "trestle",
+                new Vector3(cx, baseY + 0.04f, _buildingZ), KWood))
+            {
+                p.Add(new ProceduralPartDef($"counter_{c}_{r}", PrimitiveType.Cube,
+                    new Vector3(cx, baseY + counterH * 0.5f + 0.04f, _buildingZ),
+                    new Vector3(counterW, counterH, Cell * 0.3f), KWood));
+            }
+            // Awning
+            p.Add(new ProceduralPartDef($"awning_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy + sH * 0.25f, _buildingZ - Cell * 0.1f),
+                new Vector3(counterW * 1.1f, 0.03f, Cell * 0.5f), KFabric));
+        }
+
+        private void EmitMarketCrate(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.45f;
+            float crateS = cW * 0.30f;
+
+            if (ObjectScale.TryAdd(p, $"crate_{c}_{r}", "rounded_chest_2",
+                new Vector3(cx, baseY + 0.04f, _buildingZ), KWood))
+                return;
+
+            p.Add(new ProceduralPartDef($"crate_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + crateS * 0.5f + 0.04f, _buildingZ),
+                new Vector3(crateS, crateS, crateS), KWood));
+            // Second smaller crate on top
+            p.Add(new ProceduralPartDef($"crate2_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx + crateS * 0.15f, baseY + crateS + crateS * 0.35f + 0.04f, _buildingZ),
+                new Vector3(crateS * 0.7f, crateS * 0.7f, crateS * 0.7f), KWood));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // FARM MODULES — Crop, Trough
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitCrop(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.45f;
+            float cropH = sH * 0.50f;
+            // Soil mound
+            p.Add(new ProceduralPartDef($"soil_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + 0.04f, _buildingZ),
+                new Vector3(cW * 0.80f, 0.06f, Cell * 0.70f), KFloor));
+            // Crop rows (2 per cell)
+            for (int i = 0; i < 2; i++)
+            {
+                float px = cx + (i == 0 ? -cW * 0.15f : cW * 0.15f);
+                p.Add(new ProceduralPartDef($"crop_{c}_{r}_{i}", PrimitiveType.Cube,
+                    new Vector3(px, baseY + 0.08f + cropH * 0.5f, _buildingZ),
+                    new Vector3(cW * 0.18f, cropH, Cell * 0.18f), KGrain));
+            }
+        }
+
+        private void EmitTrough(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.45f;
+
+            if (ObjectScale.TryAdd(p, $"trough_{c}_{r}", "water_trough",
+                new Vector3(cx, baseY + 0.04f, _buildingZ), KWood))
+                return;
+
+            // Fallback: procedural trough
+            float tH = sH * 0.20f;
+            p.Add(new ProceduralPartDef($"trough_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + tH * 0.5f + 0.04f, _buildingZ),
+                new Vector3(cW * 0.60f, tH, Cell * 0.30f), KWood));
+            // Water inside
+            p.Add(new ProceduralPartDef($"trough_water_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + tH + 0.02f, _buildingZ),
+                new Vector3(cW * 0.50f, 0.02f, Cell * 0.22f), KWater));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // FOUNTAIN MODULES — Basin, Spout
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitBasin(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.45f;
+            float basinH = 0.12f;
+            float basinW = cW * 0.70f;
+            p.Add(new ProceduralPartDef($"basin_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + basinH * 0.5f + 0.02f, _buildingZ),
+                new Vector3(basinW, basinH, basinW * 0.8f), KStone));
+            // Water surface
+            p.Add(new ProceduralPartDef($"basin_water_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + basinH + 0.01f, _buildingZ),
+                new Vector3(basinW * 0.85f, 0.02f, basinW * 0.65f), KWater));
+        }
+
+        private void EmitSpout(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.45f;
+            float basinH = 0.12f;
+            float colH = sH * 0.55f;
+            float colW = cW * 0.15f;
+            // Column
+            p.Add(new ProceduralPartDef($"spout_{c}_{r}", PrimitiveType.Cylinder,
+                new Vector3(cx, baseY + basinH + colH * 0.5f, _buildingZ),
+                new Vector3(colW, colH * 0.5f, colW), KStone));
+            // Cap
+            p.Add(new ProceduralPartDef($"spout_cap_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + basinH + colH + 0.02f, _buildingZ),
+                new Vector3(colW * 2f, 0.04f, colW * 2f), KStone));
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // SHIPYARD MODULES — DrydockFrame, TimberStack
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitDrydockFrame(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.35f;
+            // Keel segment
+            float keelW = cW * 0.70f;
+            float keelH = sH * 0.15f;
+            p.Add(new ProceduralPartDef($"keel_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, baseY + keelH * 0.5f + 0.06f, _buildingZ),
+                new Vector3(keelW, keelH, Cell * 0.15f), KWood));
+            // Ribs
+            float ribH = sH * 0.35f;
+            p.Add(new ProceduralPartDef($"rib_l_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx - keelW * 0.3f, baseY + keelH + ribH * 0.5f + 0.06f, _buildingZ),
+                new Vector3(0.03f, ribH, Cell * 0.25f), KWood));
+            p.Add(new ProceduralPartDef($"rib_r_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx + keelW * 0.3f, baseY + keelH + ribH * 0.5f + 0.06f, _buildingZ),
+                new Vector3(0.03f, ribH, Cell * 0.25f), KWood));
+        }
+
+        private void EmitTimberStack(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float sH = StoryH;
+            float cW = CellW;
+            float baseY = cy - sH * 0.35f;
+            float stackW = cW * 0.60f;
+            // Logs stacked 2 high
+            for (int i = 0; i < 2; i++)
+            {
+                p.Add(new ProceduralPartDef($"timber_{c}_{r}_{i}", PrimitiveType.Cube,
+                    new Vector3(cx, baseY + 0.08f + i * 0.12f, _buildingZ + Cell * 0.30f),
+                    new Vector3(stackW, 0.10f, Cell * 0.15f), KWood));
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // PIER MODULES — PierDeck, PierCrane, PierCannon, PierFishing
+        // ═══════════════════════════════════════════════════════════════
+
+        private void EmitPierDeck(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            // Bare walkway — no additional fixtures, just a plank highlight
+            float cW = CellW;
+            p.Add(new ProceduralPartDef($"plank_{c}_{r}", PrimitiveType.Cube,
+                new Vector3(cx, cy - 0.02f, _buildingZ),
+                new Vector3(cW * 0.85f, 0.03f, Cell * 0.70f), KWood));
+        }
+
+        private void EmitPierCrane(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float cW = CellW;
+            float floorY = _roadH;
+            float h = 1.8f;
+
+            // A-frame uprights
+            float legW = 0.06f;
+            float legH = h * 0.85f;
+            float legYC = floorY + legH * 0.5f + 0.06f;
+            p.Add(new ProceduralPartDef($"crane_leg_l_{c}", PrimitiveType.Cube,
+                new Vector3(cx - cW * 0.15f, legYC, _buildingZ),
+                new Vector3(legW, legH, legW), KWood));
+            p.Add(new ProceduralPartDef($"crane_leg_r_{c}", PrimitiveType.Cube,
+                new Vector3(cx + cW * 0.15f, legYC, _buildingZ),
+                new Vector3(legW, legH, legW), KWood));
+
+            // Cross brace
+            p.Add(new ProceduralPartDef($"crane_brace_{c}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + legH * 0.45f, _buildingZ),
+                new Vector3(cW * 0.30f, 0.04f, 0.04f), KWood));
+
+            // Axle
+            float axleY = floorY + legH + 0.04f;
+            p.Add(new ProceduralPartDef($"crane_axle_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY, _buildingZ),
+                new Vector3(cW * 0.35f, 0.06f, 0.06f), KWood));
+
+            // Treadwheel
+            float wheelR = h * 0.30f;
+            float wheelZ = _buildingZ + Cell * 0.10f;
+            p.Add(new ProceduralPartDef($"wheel_rim_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY, wheelZ),
+                new Vector3(wheelR * 2f, wheelR * 2f, 0.04f), KWood));
+            p.Add(new ProceduralPartDef($"wheel_hub_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY, wheelZ),
+                new Vector3(0.08f, 0.08f, 0.06f), KMetal));
+            // Spokes
+            float spokeLen = wheelR * 0.85f;
+            p.Add(new ProceduralPartDef($"spoke_h_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY, wheelZ),
+                new Vector3(spokeLen * 2f, 0.03f, 0.03f), KWood));
+            p.Add(new ProceduralPartDef($"spoke_v_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY, wheelZ),
+                new Vector3(0.03f, spokeLen * 2f, 0.03f), KWood));
+
+            // Treadwheel treads
+            for (int t = 0; t < 8; t++)
+            {
+                float angle = t * Mathf.PI * 2f / 8;
+                float tX = cx + Mathf.Cos(angle) * wheelR * 0.75f;
+                float tY = axleY + Mathf.Sin(angle) * wheelR * 0.75f;
+                p.Add(new ProceduralPartDef($"tread_{c}_{t}", PrimitiveType.Cube,
+                    new Vector3(tX, tY, wheelZ),
+                    new Vector3(0.05f, 0.02f, 0.04f), KWood));
+            }
+
+            // Jib arm
+            float jibLen = cW * 0.70f;
+            float jibZ = _buildingZ - jibLen * 0.5f;
+            p.Add(new ProceduralPartDef($"crane_jib_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY + 0.04f, jibZ),
+                new Vector3(0.05f, 0.05f, jibLen), KWood));
+
+            // Rope + hook
+            float ropeTipZ = _buildingZ - jibLen + 0.04f;
+            float ropeH = h * 0.50f;
+            p.Add(new ProceduralPartDef($"crane_rope_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY - ropeH * 0.5f, ropeTipZ),
+                new Vector3(0.016f, ropeH, 0.016f), KFabric));
+            p.Add(new ProceduralPartDef($"crane_hook_{c}", PrimitiveType.Cube,
+                new Vector3(cx, axleY - ropeH + 0.02f, ropeTipZ),
+                new Vector3(0.04f, 0.04f, 0.03f), KMetal));
+
+            // Base plinth
+            p.Add(new ProceduralPartDef($"crane_base_{c}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + 0.04f, _buildingZ),
+                new Vector3(cW * 0.40f, 0.06f, cW * 0.35f), KStone));
+        }
+
+        private void EmitPierCannon(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
+        {
+            float cW = CellW;
+            float floorY = _roadH;
+            float barrelL = cW * 0.5f;
+            // Barrel
+            p.Add(new ProceduralPartDef($"cannon_barrel_{c}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + 0.12f, _buildingZ - Cell * 0.18f),
+                new Vector3(barrelL, 0.08f, 0.08f), KMetal));
+            // Carriage
+            p.Add(new ProceduralPartDef($"cannon_carriage_{c}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + 0.06f, _buildingZ - Cell * 0.18f),
+                new Vector3(cW * 0.35f, 0.08f, cW * 0.3f), KWood));
+        }
+
+        private void EmitPierFishing(List<ProceduralPartDef> p, float cx, float cy, int c, int r)
         {
             float floorY = _roadH;
-            float h = GetHeight();
-
-            // Back wall
-            p.Add(new ProceduralPartDef("ws_backwall", PrimitiveType.Cube,
-                new Vector3(cx, floorY + h * 0.5f, _buildingZ + Cell * 0.45f),
-                new Vector3(totalW * 0.90f, h, 0.04f), KWall));
-
-            // Floor
-            p.Add(new ProceduralPartDef("ws_floor", PrimitiveType.Cube,
-                new Vector3(cx, floorY + 0.02f, _buildingZ),
-                new Vector3(totalW * 0.88f, 0.04f, Cell * 0.85f), KStone));
-
-            // Workbenches — one per worker pair
-            int benchCount = Mathf.Max(1, _buildingWidth);
+            float poleH = 0.70f;
+            // Pole
+            p.Add(new ProceduralPartDef($"fishing_pole_{c}", PrimitiveType.Cube,
+                new Vector3(cx, floorY + poleH * 0.5f + 0.04f, _buildingZ - Cell * 0.25f),
+                new Vector3(0.02f, poleH, 0.02f), KWood));
+            // Line
+            p.Add(new ProceduralPartDef($"fishing_line_{c}", PrimitiveType.Cube,
+                new Vector3(cx + 0.04f, floorY + 0.04f, _buildingZ - Cell * 0.30f),
+                new Vector3(0.008f, poleH * 0.6f, 0.008f), KFabric));
+        }
+    }
+}
+/*
             float benchRegion = totalW * 0.9f;
             float benchSpacing = benchRegion / benchCount;
             float benchW = benchSpacing * 0.65f;
@@ -817,17 +1620,8 @@ namespace PopVuj.Game
 
         // ═══════════════════════════════════════════════════════════════
         // PIER FIXTURES — crane, cannon, fishing pole per slot
-        // ═══════════════════════════════════════════════════════════════
 
-        /// <summary>
-        /// Medieval treadwheel crane — human-powered (implied by minion attendance).
-        /// Two A-frame uprights supporting an axle, a large treadwheel on the
-        /// pier side, a jib arm extending over the water (-Z toward docked ship),
-        /// rope + hook hanging from the jib tip.
-        /// </summary>
-        private void EmitCraneFixture(List<ProceduralPartDef> p, float cx, float slotW, float floorY)
-        {
-            float h = 1.8f;
+
 
             // ── A-frame uprights (straddling the pier, oriented along Z) ──
             float legW = 0.06f;
@@ -934,33 +1728,7 @@ namespace PopVuj.Game
                 new Vector3(cx, floorY + 0.04f, _buildingZ),
                 new Vector3(slotW * 0.40f, 0.06f, slotW * 0.35f), KStone));
         }
+*/
 
-        private void EmitCannonFixture(List<ProceduralPartDef> p, float cx, float slotW, float floorY, int idx)
-        {
-            // Cannon barrel on a wooden carriage
-            float barrelL = slotW * 0.5f;
-            p.Add(new ProceduralPartDef($"cannon_barrel_{idx}", PrimitiveType.Cube,
-                new Vector3(cx, floorY + 0.12f, _buildingZ - Cell * 0.18f),
-                new Vector3(barrelL, 0.08f, 0.08f), KMetal));
 
-            // Carriage block
-            p.Add(new ProceduralPartDef($"cannon_carriage_{idx}", PrimitiveType.Cube,
-                new Vector3(cx, floorY + 0.06f, _buildingZ - Cell * 0.18f),
-                new Vector3(slotW * 0.35f, 0.08f, slotW * 0.3f), KWood));
-        }
 
-        private void EmitFishingFixture(List<ProceduralPartDef> p, float cx, float slotW, float floorY, int idx)
-        {
-            // Fishing pole — thin angled rod
-            float poleH = 0.70f;
-            p.Add(new ProceduralPartDef($"fishing_pole_{idx}", PrimitiveType.Cube,
-                new Vector3(cx, floorY + poleH * 0.5f + 0.04f, _buildingZ - Cell * 0.25f),
-                new Vector3(0.02f, poleH, 0.02f), KWood));
-
-            // Line dangling from tip
-            p.Add(new ProceduralPartDef($"fishing_line_{idx}", PrimitiveType.Cube,
-                new Vector3(cx + 0.04f, floorY + 0.04f, _buildingZ - Cell * 0.30f),
-                new Vector3(0.008f, poleH * 0.6f, 0.008f), KFabric));
-        }
-    }
-}

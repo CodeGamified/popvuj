@@ -271,7 +271,8 @@ namespace PopVuj.UI
             { if (shift) SetFateDifficulty(FateDifficulty.Chaotic); else LoadGodSample(FateDifficulty.Chaotic); }
 
             if (Input.GetKeyDown(KeyCode.R)) ReloadScene();
-            if (Input.GetKeyDown(KeyCode.D))
+            bool ctrl = Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+            if (ctrl && Input.GetKeyDown(KeyCode.D))
             {
                 SimulationTime.Instance?.SetTimeScale(1f);
                 SettingsBridge.SetQualityLevel(3); QualityBridge.SetTier(QualityTier.Ultra);
